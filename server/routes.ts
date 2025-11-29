@@ -1,4 +1,5 @@
 import type { Express } from "express";
+<<<<<<< HEAD
 import { type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 
@@ -13,11 +14,16 @@ interface RoomData {
 }
 
 const rooms = new Map<string, RoomData>();
+=======
+import { createServer, type Server } from "http";
+import { storage } from "./storage";
+>>>>>>> 9cb4134f265eef55780dc90b3f570550bf0e2451
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+<<<<<<< HEAD
   
   // WebSocket signaling server
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
@@ -119,6 +125,13 @@ export async function registerRoutes(
       console.error("WebSocket error:", error);
     });
   });
+=======
+  // put application routes here
+  // prefix all routes with /api
+
+  // use storage to perform CRUD operations on the storage interface
+  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
+>>>>>>> 9cb4134f265eef55780dc90b3f570550bf0e2451
 
   return httpServer;
 }
