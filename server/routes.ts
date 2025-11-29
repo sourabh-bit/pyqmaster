@@ -1,5 +1,4 @@
 import type { Express } from "express";
-<<<<<<< HEAD
 import { type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 
@@ -14,16 +13,11 @@ interface RoomData {
 }
 
 const rooms = new Map<string, RoomData>();
-=======
-import { createServer, type Server } from "http";
-import { storage } from "./storage";
->>>>>>> 9cb4134f265eef55780dc90b3f570550bf0e2451
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-<<<<<<< HEAD
   
   // WebSocket signaling server
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
@@ -41,7 +35,7 @@ export async function registerRoutes(
           currentRoom = roomId;
           myProfile = data.profile;
           
-          // Create room if doesn't exist
+          // Create room if it doesn't exist
           if (!rooms.has(roomId)) {
             rooms.set(roomId, {
               clients: new Map(),
@@ -62,7 +56,7 @@ export async function registerRoutes(
             }
           });
           
-          // Send joined confirmation with peer info
+          // Send joined confirmation
           ws.send(JSON.stringify({ 
             type: "joined", 
             roomId, 
@@ -71,7 +65,7 @@ export async function registerRoutes(
             peerProfile: peerProfile
           }));
           
-          // Notify existing members with new user's profile
+          // Notify existing peers
           if (roomSize >= 2) {
             room.clients.forEach((client, clientWs) => {
               if (clientWs !== ws && clientWs.readyState === WebSocket.OPEN) {
@@ -83,8 +77,9 @@ export async function registerRoutes(
               }
             });
           }
+
         } else if (currentRoom && rooms.has(currentRoom)) {
-          // Relay all other messages to peers in the room
+          // Relay signaling messages
           const room = rooms.get(currentRoom)!;
           room.clients.forEach((client, clientWs) => {
             if (clientWs !== ws && clientWs.readyState === WebSocket.OPEN) {
@@ -102,14 +97,14 @@ export async function registerRoutes(
         const room = rooms.get(currentRoom)!;
         room.clients.delete(ws);
         
-        // Notify remaining peers
+        // Notify peers
         room.clients.forEach((client, clientWs) => {
           if (clientWs.readyState === WebSocket.OPEN) {
             clientWs.send(JSON.stringify({ type: "peer-left", roomId: currentRoom }));
           }
         });
         
-        // Clean up empty rooms
+        // Cleanup
         if (room.clients.size === 0) {
           setTimeout(() => {
             const r = rooms.get(currentRoom!);
@@ -125,13 +120,6 @@ export async function registerRoutes(
       console.error("WebSocket error:", error);
     });
   });
-=======
-  // put application routes here
-  // prefix all routes with /api
-
-  // use storage to perform CRUD operations on the storage interface
-  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
->>>>>>> 9cb4134f265eef55780dc90b3f570550bf0e2451
 
   return httpServer;
 }

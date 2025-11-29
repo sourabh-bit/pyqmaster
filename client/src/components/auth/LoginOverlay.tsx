@@ -29,15 +29,9 @@ export function LoginOverlay({ isOpen, onSuccess, onClose }: LoginOverlayProps) 
     e.preventDefault();
     
     if (step === 'password') {
-<<<<<<< HEAD
       // Shared secret (gatekeeper key) - stored in localStorage
       const gatekeeperKey = localStorage.getItem('gatekeeper_key') || 'secret';
       if (password === gatekeeperKey) {
-=======
-      // Shared secret for first step (hardcoded or env in real app)
-      // Let's say both need to know the "Gatekeeper" password first
-      if (password === "secret" || password === "gatekeeper") {
->>>>>>> 9cb4134f265eef55780dc90b3f570550bf0e2451
         setStep('pin');
         setError(false);
       } else {

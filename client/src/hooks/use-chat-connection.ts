@@ -272,9 +272,14 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     return newMsg;
   };
 
-  const deleteMessage = (msgId: string) => {
+  const deleteMessage = useCallback((msgId: string) => {
     setMessages(prev => prev.filter(m => m.id !== msgId));
-  };
+  }, []);
+
+  const deleteMessages = useCallback((msgIds: string[]) => {
+    const idSet = new Set(msgIds);
+    setMessages(prev => prev.filter(m => !idSet.has(m.id)));
+  }, []);
 
   const startCall = async (mode: 'voice' | 'video') => {
     if (!peerConnected) {
@@ -443,6 +448,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     messages,
     sendMessage,
     deleteMessage,
+    deleteMessages,
     clearMessages,
     handleTyping,
     startCall,

@@ -1,17 +1,12 @@
-<<<<<<< HEAD
-=======
 import { Switch, Route } from "wouter";
->>>>>>> 9cb4134f265eef55780dc90b3f570550bf0e2451
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-<<<<<<< HEAD
-import Home from "@/pages/Home";
+import { ThemeProvider } from "@/components/ThemeProvider";
 
-=======
-import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
+import NotFound from "@/pages/not-found";
 
 function Router() {
   return (
@@ -22,19 +17,16 @@ function Router() {
   );
 }
 
->>>>>>> 9cb4134f265eef55780dc90b3f570550bf0e2451
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-<<<<<<< HEAD
-        <Home />
-=======
-        <Router />
->>>>>>> 9cb4134f265eef55780dc90b3f570550bf0e2451
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <Router />
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }
 
