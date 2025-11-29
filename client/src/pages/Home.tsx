@@ -3,6 +3,7 @@ import { PYQView } from "@/components/disguise/PYQView";
 import { CalculatorView } from "@/components/disguise/CalculatorView";
 import { LoginOverlay } from "@/components/auth/LoginOverlay";
 import { ChatLayout } from "@/components/chat/ChatLayout";
+import { AdminPanel } from "@/components/admin/AdminPanel";
 import { Toaster } from "@/components/ui/toaster";
 
 type AppMode = 'disguise' | 'chat';
@@ -11,8 +12,10 @@ type DisguiseType = 'pyq' | 'calc';
 export default function Home() {
   // Initialize state
   const [mode, setMode] = useState<AppMode>('disguise');
-  const [disguiseType, setDisguiseType] = useState<DisguiseType>('pyq'); // Can be toggled via URL param ?mode=calc
+  const [disguiseType, setDisguiseType] = useState<DisguiseType>('pyq'); 
   const [showLogin, setShowLogin] = useState(false);
+  const [currentUser, setCurrentUser] = useState<'admin' | 'friend'>('friend');
+  const [showAdminPanel, setShowAdminPanel] = useState(false);
 
   // Check URL params for disguise mode preference
   useEffect(() => {
@@ -22,7 +25,7 @@ export default function Home() {
     }
   }, []);
 
-  // Auto-lock logic (simple inactivity timer)
+  // Auto-lock logic
   useEffect(() => {
     let timeout: NodeJS.Timeout;
     
@@ -52,7 +55,8 @@ export default function Home() {
     setShowLogin(true);
   };
 
-  const handleLoginSuccess = () => {
+  const handleLoginSuccess = (userType: 'admin' | 'friend') => {
+    setCurrentUser(userType);
     setShowLogin(false);
     setMode('chat');
   };
@@ -61,6 +65,17 @@ export default function Home() {
     setMode('disguise');
     setShowLogin(false);
   };
+
+  // Keyboard shortcut for Admin Panel (Ctrl+Shift+A or hidden gesture)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (mode === 'chat' && currentUser === 'admin' && e.ctrlKey && e.shiftKey && e.key === 'A') {
+        setShowAdminPanel(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [mode, currentUser]);
 
   return (
     <div className="min-h-screen w-full overflow-hidden relative">
@@ -75,7 +90,7 @@ export default function Home() {
         </>
       )}
 
-      {/* Render Login Overlay (Always mounted but hidden/shown via internal state logic) */}
+      {/* Render Login Overlay */}
       <LoginOverlay 
         isOpen={showLogin} 
         onSuccess={handleLoginSuccess} 
@@ -84,7 +99,26 @@ export default function Home() {
 
       {/* Render Chat Layer */}
       {mode === 'chat' && (
-        <ChatLayout onLock={handlePanicLock} />
+        <>
+          <ChatLayout 
+             onLock={handlePanicLock} 
+             currentUser={currentUser} 
+          />
+          
+          {/* Admin Trigger Button (Hidden/Visible for Admin) */}
+          {currentUser === 'admin' && (
+            <button 
+              onClick={() => setShowAdminPanel(true)}
+              className="fixed bottom-4 right-4 w-8 h-8 rounded-full bg-transparent z-50 opacity-0 hover:opacity-100 transition-opacity"
+              title="Admin Panel"
+            />
+          )}
+          
+          <AdminPanel 
+            isOpen={showAdminPanel} 
+            onClose={() => setShowAdminPanel(false)} 
+          />
+        </>
       )}
       
       <Toaster />

@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 
 interface LoginOverlayProps {
   isOpen: boolean;
-  onSuccess: () => void;
+  onSuccess: (userType: 'admin' | 'friend') => void;
   onClose: () => void;
 }
 
@@ -27,19 +27,25 @@ export function LoginOverlay({ isOpen, onSuccess, onClose }: LoginOverlayProps) 
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    // MOCK AUTHENTICATION
+    
     if (step === 'password') {
-      // Fake password check (accept "admin" or "secret")
-      if (password === "admin" || password === "secret") {
+      // Shared secret for first step (hardcoded or env in real app)
+      // Let's say both need to know the "Gatekeeper" password first
+      if (password === "secret" || password === "gatekeeper") {
         setStep('pin');
         setError(false);
       } else {
         shakeError();
       }
     } else {
-      // Fake PIN check (accept "1234")
-      if (pin === "1234") {
-        onSuccess();
+      // Step 2: Individual PINs (fetched from localStorage/settings)
+      const adminPin = localStorage.getItem('admin_pass') || '1234';
+      const friendPin = localStorage.getItem('friend_pass') || '5678';
+
+      if (pin === adminPin) {
+        onSuccess('admin');
+      } else if (pin === friendPin) {
+        onSuccess('friend');
       } else {
         shakeError();
       }
@@ -77,7 +83,7 @@ export function LoginOverlay({ isOpen, onSuccess, onClose }: LoginOverlayProps) 
           <form onSubmit={handleLogin} className="space-y-6">
             <div className="space-y-2">
               <label className="text-xs font-mono text-white/40 uppercase tracking-widest ml-1">
-                {step === 'password' ? 'Identity Key' : 'Security PIN'}
+                {step === 'password' ? 'Gatekeeper Key' : 'Personal ID PIN'}
               </label>
               <div className={cn("relative transition-transform", error && "animate-shake")}>
                 <input
