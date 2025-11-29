@@ -36,6 +36,23 @@ export function ChatLayout({ onLock }: ChatLayoutProps) {
   ]);
   const [inputText, setInputText] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const channelRef = useRef<BroadcastChannel | null>(null);
+
+  // Setup BroadcastChannel for cross-tab communication (Mocking real-time)
+  useEffect(() => {
+    channelRef.current = new BroadcastChannel('secure_chat_channel');
+    
+    channelRef.current.onmessage = (event) => {
+      const data = event.data;
+      if (data.type === 'message') {
+        setMessages(prev => [...prev, { ...data.payload, sender: 'them', status: 'seen' }]);
+      }
+    };
+
+    return () => {
+      channelRef.current?.close();
+    };
+  }, []);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -59,14 +76,17 @@ export function ChatLayout({ onLock }: ChatLayoutProps) {
     setMessages(prev => [...prev, newMsg]);
     setInputText("");
 
-    // Simulate reply (NOTE: In a real app, this would be a socket event)
+    // Broadcast to other tabs (Simulate sending)
+    channelRef.current?.postMessage({ type: 'message', payload: newMsg });
+
+    // Update status locally
     setTimeout(() => {
       setMessages(prev => prev.map(m => m.id === newMsg.id ? { ...m, status: 'delivered' } : m));
-    }, 1000);
+    }, 500);
     
     setTimeout(() => {
       setMessages(prev => prev.map(m => m.id === newMsg.id ? { ...m, status: 'seen' } : m));
-    }, 2000);
+    }, 1000);
   };
 
   const handleCall = (type: 'voice' | 'video') => {
@@ -125,6 +145,9 @@ export function ChatLayout({ onLock }: ChatLayoutProps) {
                 <button onClick={handleCopyLink} className="p-3 bg-primary text-primary-foreground rounded hover:bg-primary/90">
                   <Copy size={16} />
                 </button>
+              </div>
+              <div className="mt-4 p-3 bg-blue-50 text-blue-800 text-xs rounded border border-blue-100">
+                <strong>How to test:</strong> Open this link in a new tab or incognito window. Log in with the same credentials. Messages sent in one tab will appear in the other!
               </div>
             </DialogContent>
           </Dialog>
