@@ -22,6 +22,9 @@ const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:global.stun.twilio.com:3478' },
     {
       urls: 'turn:openrelay.metered.ca:80',
@@ -32,8 +35,14 @@ const ICE_SERVERS = {
       urls: 'turn:openrelay.metered.ca:443',
       username: 'openrelayproject',
       credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
     }
-  ]
+  ],
+  iceCandidatePoolSize: 10
 };
 
 const FIXED_ROOM_ID = 'SECURE_CHAT_MAIN';
@@ -87,6 +96,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const currentCallType = useRef<'voice' | 'video' | null>(null);
 
   useEffect(() => {
     localStorage.setItem('chat_messages', JSON.stringify(messages));
@@ -202,11 +212,13 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         break;
 
       case 'call-request':
+        currentCallType.current = data.callType;
         setIncomingCall({ type: data.callType, from: data.from });
         setCallStatus('ringing');
         break;
 
       case 'call-accepted':
+        currentCallType.current = data.callType;
         await initiateWebRTC(data.callType);
         break;
 
@@ -214,6 +226,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         toast({ title: "Call declined" });
         setCallStatus('idle');
         setActiveCall(null);
+        currentCallType.current = null;
         break;
 
       case 'offer':
@@ -281,11 +294,30 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     setMessages(prev => prev.filter(m => !idSet.has(m.id)));
   }, []);
 
+  const getMediaConstraints = (mode: 'voice' | 'video') => {
+    return {
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        sampleRate: 48000,
+        channelCount: 1
+      },
+      video: mode === 'video' ? {
+        width: { ideal: 1280, max: 1920 },
+        height: { ideal: 720, max: 1080 },
+        frameRate: { ideal: 30, max: 30 },
+        facingMode: 'user'
+      } : false
+    };
+  };
+
   const startCall = async (mode: 'voice' | 'video') => {
     if (!peerConnected) {
       toast({ variant: "destructive", title: "Friend not online" });
       return;
     }
+    currentCallType.current = mode;
     setActiveCall(mode);
     setCallStatus('calling');
     sendSignal({ type: 'call-request', callType: mode, from: myProfile.name });
@@ -294,6 +326,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const acceptCall = async () => {
     if (!incomingCall) return;
     const callType = incomingCall.type;
+    currentCallType.current = callType;
     setActiveCall(callType);
     setIncomingCall(null);
     setCallStatus('connected');
@@ -304,6 +337,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     sendSignal({ type: 'call-rejected' });
     setIncomingCall(null);
     setCallStatus('idle');
+    currentCallType.current = null;
   };
 
   const endCall = () => {
@@ -313,18 +347,24 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
   const initiateWebRTC = async (mode: 'voice' | 'video') => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: mode === 'video' });
+      const constraints = getMediaConstraints(mode);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
       setLocalStream(stream);
       localStreamRef.current = stream;
 
       const peer = createPeerConnection(stream);
       peerRef.current = peer;
 
-      const offer = await peer.createOffer();
+      const offer = await peer.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: mode === 'video'
+      });
       await peer.setLocalDescription(offer);
       sendSignal({ type: 'offer', sdp: offer });
       setCallStatus('connected');
     } catch (err) {
+      console.error('Media error:', err);
       toast({ variant: "destructive", title: "Could not access camera/microphone" });
       cleanupCall();
     }
@@ -332,24 +372,43 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
   const createPeerConnection = (stream: MediaStream) => {
     const peer = new RTCPeerConnection(ICE_SERVERS);
-    stream.getTracks().forEach(track => peer.addTrack(track, stream));
+    
+    stream.getTracks().forEach(track => {
+      peer.addTrack(track, stream);
+    });
 
     peer.onicecandidate = (event) => {
       if (event.candidate) {
         sendSignal({
           type: 'ice-candidate',
-          candidate: { candidate: event.candidate.candidate, sdpMLineIndex: event.candidate.sdpMLineIndex, sdpMid: event.candidate.sdpMid }
+          candidate: {
+            candidate: event.candidate.candidate,
+            sdpMLineIndex: event.candidate.sdpMLineIndex,
+            sdpMid: event.candidate.sdpMid
+          }
         });
       }
     };
 
-    peer.ontrack = (event) => setRemoteStream(event.streams[0]);
+    peer.ontrack = (event) => {
+      console.log('Received remote track:', event.track.kind);
+      if (event.streams && event.streams[0]) {
+        setRemoteStream(event.streams[0]);
+      }
+    };
 
     peer.oniceconnectionstatechange = () => {
-      if (peer.iceConnectionState === 'disconnected' || peer.iceConnectionState === 'failed') {
+      console.log('ICE state:', peer.iceConnectionState);
+      if (peer.iceConnectionState === 'connected') {
+        setCallStatus('connected');
+      } else if (peer.iceConnectionState === 'disconnected' || peer.iceConnectionState === 'failed') {
         toast({ title: "Call connection lost", variant: "destructive" });
         cleanupCall();
       }
+    };
+
+    peer.onconnectionstatechange = () => {
+      console.log('Connection state:', peer.connectionState);
     };
 
     return peer;
@@ -357,7 +416,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
   const handleOffer = async (sdp: RTCSessionDescriptionInit) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: activeCall === 'video' });
+      const mode = currentCallType.current || 'voice';
+      const constraints = getMediaConstraints(mode);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
       setLocalStream(stream);
       localStreamRef.current = stream;
 
@@ -365,41 +427,71 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       peerRef.current = peer;
 
       await peer.setRemoteDescription(new RTCSessionDescription(sdp));
+      
       for (const candidate of pendingCandidates.current) {
-        await peer.addIceCandidate(new RTCIceCandidate(candidate));
+        try {
+          await peer.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.error('Error adding pending candidate:', e);
+        }
       }
       pendingCandidates.current = [];
 
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
       sendSignal({ type: 'answer', sdp: answer });
+      setCallStatus('connected');
     } catch (e) {
       console.error('Error handling offer:', e);
+      toast({ variant: "destructive", title: "Failed to connect call" });
+      cleanupCall();
     }
   };
 
   const handleAnswer = async (sdp: RTCSessionDescriptionInit) => {
     if (!peerRef.current) return;
-    await peerRef.current.setRemoteDescription(new RTCSessionDescription(sdp));
-    for (const candidate of pendingCandidates.current) {
-      await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+    try {
+      await peerRef.current.setRemoteDescription(new RTCSessionDescription(sdp));
+      
+      for (const candidate of pendingCandidates.current) {
+        try {
+          await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.error('Error adding pending candidate:', e);
+        }
+      }
+      pendingCandidates.current = [];
+    } catch (e) {
+      console.error('Error handling answer:', e);
     }
-    pendingCandidates.current = [];
   };
 
   const handleIceCandidate = async (candidate: RTCIceCandidateInit) => {
     if (!candidate) return;
+    
     if (peerRef.current?.remoteDescription) {
-      await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      try {
+        await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.error('Error adding ICE candidate:', e);
+      }
     } else {
       pendingCandidates.current.push(candidate);
     }
   };
 
   const cleanupCall = useCallback(() => {
-    localStreamRef.current?.getTracks().forEach(track => track.stop());
-    peerRef.current?.close();
-    peerRef.current = null;
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+      });
+    }
+    
+    if (peerRef.current) {
+      peerRef.current.close();
+      peerRef.current = null;
+    }
+    
     setLocalStream(null);
     setRemoteStream(null);
     setActiveCall(null);
@@ -407,19 +499,26 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     setCallStatus('idle');
     setIsMuted(false);
     setIsVideoOff(false);
+    currentCallType.current = null;
     pendingCandidates.current = [];
   }, []);
 
   const toggleMute = () => {
-    if (localStream) {
-      localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
+    if (localStreamRef.current) {
+      const audioTracks = localStreamRef.current.getAudioTracks();
+      audioTracks.forEach(track => {
+        track.enabled = !track.enabled;
+      });
       setIsMuted(!isMuted);
     }
   };
 
   const toggleVideo = () => {
-    if (localStream) {
-      localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
+    if (localStreamRef.current) {
+      const videoTracks = localStreamRef.current.getVideoTracks();
+      videoTracks.forEach(track => {
+        track.enabled = !track.enabled;
+      });
       setIsVideoOff(!isVideoOff);
     }
   };
