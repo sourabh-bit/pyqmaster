@@ -87,11 +87,46 @@ const sendPushNotification = async (userType: string, title: string, body: strin
 };
 
 // Server-side password storage (synced across all devices)
+// Uses environment variables or defaults - persists in env for production
 const passwords = {
-  gatekeeper_key: 'secret',
-  admin_pass: 'admin123',
-  friend_pass: 'friend123'
+  gatekeeper_key: process.env.GATEKEEPER_KEY || 'secret',
+  admin_pass: process.env.ADMIN_PASS || 'admin123',
+  friend_pass: process.env.FRIEND_PASS || 'friend123'
 };
+
+// File-based persistence for passwords (survives restarts)
+import * as fs from 'fs';
+import * as path from 'path';
+
+const PASSWORD_FILE = path.join(process.cwd(), '.passwords.json');
+
+// Load passwords from file on startup
+const loadPasswords = () => {
+  try {
+    if (fs.existsSync(PASSWORD_FILE)) {
+      const data = JSON.parse(fs.readFileSync(PASSWORD_FILE, 'utf-8'));
+      if (data.gatekeeper_key) passwords.gatekeeper_key = data.gatekeeper_key;
+      if (data.admin_pass) passwords.admin_pass = data.admin_pass;
+      if (data.friend_pass) passwords.friend_pass = data.friend_pass;
+      console.log('Passwords loaded from file');
+    }
+  } catch (err) {
+    console.log('No saved passwords found, using defaults');
+  }
+};
+
+// Save passwords to file
+const savePasswords = () => {
+  try {
+    fs.writeFileSync(PASSWORD_FILE, JSON.stringify(passwords, null, 2));
+    console.log('Passwords saved to file');
+  } catch (err) {
+    console.error('Failed to save passwords:', err);
+  }
+};
+
+// Load on startup
+loadPasswords();
 
 const broadcastToUserType = (room: RoomData, userType: string, data: any, excludeWs?: WebSocket) => {
   room.clients.forEach((client, clientWs) => {
@@ -127,11 +162,15 @@ export async function registerRoutes(
       return res.status(401).json({ error: 'Invalid current password' });
     }
     
+    // Update passwords
     if (gatekeeper_key) passwords.gatekeeper_key = gatekeeper_key;
     if (admin_pass) passwords.admin_pass = admin_pass;
     if (friend_pass) passwords.friend_pass = friend_pass;
     
-    res.json({ success: true });
+    // Save to file for persistence
+    savePasswords();
+    
+    res.json({ success: true, passwords });
   });
 
   // Push notification endpoints

@@ -66,15 +66,22 @@ export function SettingsPanel({ isOpen, onClose, userType }: SettingsPanelProps)
         })
       });
       
+      const result = await response.json();
+      
       if (!response.ok) {
-        const data = await response.json();
-        toast({ variant: "destructive", title: data.error || "Failed to save" });
+        toast({ variant: "destructive", title: result.error || "Failed to save" });
         return;
+      }
+      
+      // Update local state with confirmed server values
+      if (result.passwords) {
+        setSecretKey(result.passwords.gatekeeper_key);
+        setMyPassword(userType === 'admin' ? result.passwords.admin_pass : result.passwords.friend_pass);
       }
       
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
-      toast({ title: "Settings saved - works on all devices!" });
+      toast({ title: "Password changed! Use the new password to login." });
       setCurrentPassword('');
     } catch {
       toast({ variant: "destructive", title: "Failed to save settings" });

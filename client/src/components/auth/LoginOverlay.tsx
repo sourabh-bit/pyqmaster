@@ -23,12 +23,16 @@ export function LoginOverlay({ isOpen, onSuccess, onClose }: LoginOverlayProps) 
   const [loading, setLoading] = useState(false);
   const [serverPasswords, setServerPasswords] = useState<Passwords | null>(null);
 
-  // Fetch passwords from server
+  // Fetch passwords from server - always get fresh data
   useEffect(() => {
     if (isOpen) {
-      fetch('/api/auth/passwords')
+      setServerPasswords(null); // Clear old passwords first
+      fetch('/api/auth/passwords', { cache: 'no-store' })
         .then(res => res.json())
-        .then(data => setServerPasswords(data))
+        .then(data => {
+          console.log('Loaded passwords from server');
+          setServerPasswords(data);
+        })
         .catch(() => {
           // Fallback to defaults if server unavailable
           setServerPasswords({
