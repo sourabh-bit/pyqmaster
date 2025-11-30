@@ -33,17 +33,29 @@ export function ActiveCallOverlay({
   const [duration, setDuration] = useState(0);
   const [showLocalVideo, setShowLocalVideo] = useState(true);
 
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+
   useEffect(() => {
     if (localVideoRef.current && localStream) {
       localVideoRef.current.srcObject = localStream;
       localVideoRef.current.muted = true;
+      localVideoRef.current.volume = 0;
     }
   }, [localStream]);
 
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.muted = false;
+    if (remoteStream) {
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStream;
+        remoteVideoRef.current.muted = false;
+        remoteVideoRef.current.volume = 1;
+      }
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = remoteStream;
+        remoteAudioRef.current.muted = false;
+        remoteAudioRef.current.volume = 1;
+        remoteAudioRef.current.play().catch(console.error);
+      }
     }
   }, [remoteStream]);
 
@@ -62,6 +74,9 @@ export function ActiveCallOverlay({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col overflow-hidden">
+      {/* Hidden audio element for reliable audio playback */}
+      <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+      
       {/* Remote Video/Audio */}
       <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-slate-900 to-slate-950">
         {remoteStream && hasRemoteVideo ? (

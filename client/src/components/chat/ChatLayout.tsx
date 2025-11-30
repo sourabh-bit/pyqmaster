@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from "react";
-import { Send, Paperclip, Mic, Video, Phone, Lock, CheckCheck, Smile, PhoneOff, Menu, X, Trash2, Square, Check } from "lucide-react";
+import { Send, Paperclip, Mic, Video, Phone, Lock, CheckCheck, Smile, PhoneOff, Menu, X, Trash2, Square, Check, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format, formatDistanceToNow } from "date-fns";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -14,6 +14,7 @@ import { ProfileEditor } from "./ProfileEditor";
 import { MediaViewer } from "./MediaViewer";
 import { AudioPlayer } from "./AudioPlayer";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { SettingsPanel } from "@/components/settings/SettingsPanel";
 
 interface ChatLayoutProps {
   onLock: () => void;
@@ -158,6 +159,7 @@ export function ChatLayout({ onLock, currentUser }: ChatLayoutProps) {
   const [inputText, setInputText] = useState("");
   const [showProfileEditor, setShowProfileEditor] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [selectedMedia, setSelectedMedia] = useState<{ url: string; type: 'image' | 'video' } | null>(null);
   const [messageToDelete, setMessageToDelete] = useState<string | null>(null);
   const [longPressTimer, setLongPressTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
@@ -447,6 +449,13 @@ export function ChatLayout({ onLock, currentUser }: ChatLayoutProps) {
         onSave={(name, avatar) => updateMyProfile({ name, avatar })}
       />
 
+      {/* Settings Panel */}
+      <SettingsPanel
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        userType={currentUser}
+      />
+
       {/* Hidden File Input */}
       <input 
         type="file" 
@@ -491,6 +500,13 @@ export function ChatLayout({ onLock, currentUser }: ChatLayoutProps) {
             </div>
           </div>
           <div className="flex items-center gap-1">
+            <button 
+              onClick={() => { setShowSettings(true); setShowSidebar(false); }} 
+              className="p-2 hover:bg-secondary rounded-lg transition-colors"
+              title="Settings"
+            >
+              <Settings size={18} />
+            </button>
             <ThemeToggle />
             <button onClick={() => setShowSidebar(false)} className="p-2 md:hidden hover:bg-secondary rounded-lg transition-colors">
               <X size={20} />

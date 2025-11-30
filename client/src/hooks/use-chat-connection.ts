@@ -297,11 +297,13 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const getMediaConstraints = (mode: 'voice' | 'video') => {
     return {
       audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        sampleRate: 48000,
-        channelCount: 1
+        echoCancellation: { exact: true },
+        noiseSuppression: { exact: true },
+        autoGainControl: { exact: true },
+        sampleRate: { ideal: 48000 },
+        channelCount: { exact: 1 },
+        latency: { ideal: 0.01 },
+        suppressLocalAudioPlayback: true
       },
       video: mode === 'video' ? {
         width: { ideal: 1280, max: 1920 },
