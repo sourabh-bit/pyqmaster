@@ -107,20 +107,25 @@ export async function registerRoutes(
           const room = rooms.get(roomId)!;
           room.clients.set(ws, { ws, profile: myProfile, userType: myUserType, deviceId: myDeviceId });
           
-          // Count unique user types online
-          const onlineUserTypes = new Set<string>();
-          room.clients.forEach((client) => {
-            if (client.userType) onlineUserTypes.add(client.userType);
-          });
+          // Get the opposite user type
+          const peerUserType = myUserType === 'admin' ? 'friend' : 'admin';
           
-          // Get peer profile (opposite user type)
+          // Check if any peer (opposite user type) is online
           let peerProfile: { name: string; avatar: string } | undefined;
           let peerOnline = false;
           room.clients.forEach((client, clientWs) => {
-            if (client.userType !== myUserType && client.profile) {
-              peerProfile = client.profile;
-              peerOnline = clientWs.readyState === WebSocket.OPEN;
+            if (client.userType === peerUserType && clientWs.readyState === WebSocket.OPEN) {
+              peerOnline = true;
+              if (client.profile) {
+                peerProfile = client.profile;
+              }
             }
+          });
+          
+          // Count unique user types online (for initiator logic)
+          const onlineUserTypes = new Set<string>();
+          room.clients.forEach((client) => {
+            if (client.userType) onlineUserTypes.add(client.userType);
           });
           
           ws.send(JSON.stringify({ 
@@ -161,16 +166,26 @@ export async function registerRoutes(
             });
           }
           
-          // Notify peers about new connection
+          // Check if this is the first device of this user type to join
+          let isFirstDeviceOfType = true;
           room.clients.forEach((client, clientWs) => {
-            if (client.userType !== myUserType && clientWs.readyState === WebSocket.OPEN) {
-              clientWs.send(JSON.stringify({ 
-                type: "peer-joined", 
-                roomId,
-                profile: myProfile 
-              }));
+            if (client.userType === myUserType && clientWs !== ws) {
+              isFirstDeviceOfType = false;
             }
           });
+          
+          // Only notify opposite user type if this is the first device of this user type
+          if (isFirstDeviceOfType) {
+            room.clients.forEach((client, clientWs) => {
+              if (client.userType !== myUserType && clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({ 
+                  type: "peer-joined", 
+                  roomId,
+                  profile: myProfile 
+                }));
+              }
+            });
+          }
 
         } else if (type === "chat-message" && currentRoom) {
           const room = rooms.get(currentRoom);
@@ -272,12 +287,23 @@ export async function registerRoutes(
         const room = rooms.get(currentRoom)!;
         room.clients.delete(ws);
         
-        // Notify peers
-        room.clients.forEach((client, clientWs) => {
-          if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(JSON.stringify({ type: "peer-left", roomId: currentRoom }));
+        // Check if there are still other connections of the same user type
+        let sameUserTypeStillOnline = false;
+        room.clients.forEach((client) => {
+          if (client.userType === myUserType) {
+            sameUserTypeStillOnline = true;
           }
         });
+        
+        // Only notify peers if this was the last connection of this user type
+        if (!sameUserTypeStillOnline) {
+          room.clients.forEach((client, clientWs) => {
+            // Only notify the opposite user type that this user went offline
+            if (client.userType !== myUserType && clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({ type: "peer-left", roomId: currentRoom }));
+            }
+          });
+        }
         
         // Cleanup
         if (room.clients.size === 0) {
