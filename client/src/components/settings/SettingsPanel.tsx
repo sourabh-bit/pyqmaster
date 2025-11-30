@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Key, Lock, Eye, EyeOff, Save, Check } from "lucide-react";
+import { X, Key, Lock, Eye, EyeOff, Save, Check, RotateCcw, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 
@@ -22,6 +22,27 @@ export function SettingsPanel({ isOpen, onClose, userType }: SettingsPanelProps)
   
   const [currentPassword, setCurrentPassword] = useState('');
   const [saved, setSaved] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
+  const handleResetApp = () => {
+    // Clear all app data
+    const keysToKeep = ['gatekeeper_key', 'admin_pass', 'friend_pass'];
+    const savedKeys: Record<string, string> = {};
+    keysToKeep.forEach(key => {
+      const val = localStorage.getItem(key);
+      if (val) savedKeys[key] = val;
+    });
+    
+    localStorage.clear();
+    
+    // Restore passwords
+    Object.entries(savedKeys).forEach(([key, val]) => {
+      localStorage.setItem(key, val);
+    });
+    
+    toast({ title: "App reset! Refreshing...", variant: "destructive" });
+    setTimeout(() => window.location.reload(), 1000);
+  };
 
   const handleSave = () => {
     const storedPass = localStorage.getItem(userType === 'admin' ? 'admin_pass' : 'friend_pass') || 
@@ -144,7 +165,7 @@ export function SettingsPanel({ isOpen, onClose, userType }: SettingsPanelProps)
           </div>
 
           {/* Footer */}
-          <div className="p-4 border-t border-border bg-secondary/30">
+          <div className="p-4 border-t border-border bg-secondary/30 space-y-3">
             <button
               onClick={handleSave}
               disabled={!currentPassword}
@@ -168,6 +189,33 @@ export function SettingsPanel({ isOpen, onClose, userType }: SettingsPanelProps)
                 </>
               )}
             </button>
+            
+            {/* Reset App Button */}
+            {!showResetConfirm ? (
+              <button
+                onClick={() => setShowResetConfirm(true)}
+                className="w-full py-2.5 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-secondary flex items-center justify-center gap-2 transition-all"
+              >
+                <RotateCcw size={14} />
+                Reset App Data
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowResetConfirm(false)}
+                  className="flex-1 py-2.5 rounded-lg text-sm bg-secondary hover:bg-secondary/80 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleResetApp}
+                  className="flex-1 py-2.5 rounded-lg text-sm bg-destructive text-destructive-foreground hover:bg-destructive/90 flex items-center justify-center gap-2 transition-colors"
+                >
+                  <Trash2 size={14} />
+                  Confirm Reset
+                </button>
+              </div>
+            )}
           </div>
         </motion.div>
       </div>

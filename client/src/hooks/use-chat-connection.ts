@@ -62,8 +62,24 @@ const showBrowserNotification = (title: string, body: string, icon?: string) => 
   }
 };
 
+// Migrate old localStorage keys to new format
+const migrateLocalStorage = (userType: 'admin' | 'friend') => {
+  // Clean up old profile keys that might cause confusion
+  const oldKeys = ['profile_admin', 'profile_friend'];
+  oldKeys.forEach(key => {
+    if (localStorage.getItem(key)) {
+      localStorage.removeItem(key);
+    }
+  });
+};
+
 export function useChatConnection(userType: 'admin' | 'friend') {
   const { toast } = useToast();
+  
+  // Run migration on first load
+  useState(() => {
+    migrateLocalStorage(userType);
+  });
   
   const [isConnected, setIsConnected] = useState(false);
   const [peerConnected, setPeerConnected] = useState(false);
@@ -73,8 +89,12 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const [myProfile, setMyProfile] = useState<UserProfile>(() => {
     const saved = localStorage.getItem(`chat_my_profile_${userType}`);
     if (saved) {
-      const parsed = JSON.parse(saved);
-      return { ...parsed, lastSeen: null, isTyping: false };
+      try {
+        const parsed = JSON.parse(saved);
+        return { ...parsed, lastSeen: null, isTyping: false };
+      } catch {
+        localStorage.removeItem(`chat_my_profile_${userType}`);
+      }
     }
     return {
       name: userType === 'admin' ? 'Admin' : 'Friend',
@@ -87,8 +107,16 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const [peerProfile, setPeerProfile] = useState<UserProfile>(() => {
     const saved = localStorage.getItem(`chat_peer_profile_${userType}`);
     if (saved) {
-      const parsed = JSON.parse(saved);
-      return { ...parsed, lastSeen: new Date(parsed.lastSeen), isTyping: false };
+      try {
+        const parsed = JSON.parse(saved);
+        return { 
+          ...parsed, 
+          lastSeen: parsed.lastSeen ? new Date(parsed.lastSeen) : null, 
+          isTyping: false 
+        };
+      } catch {
+        localStorage.removeItem(`chat_peer_profile_${userType}`);
+      }
     }
     return {
       name: defaultPeerName,
