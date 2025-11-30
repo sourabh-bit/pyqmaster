@@ -48,16 +48,43 @@ const ICE_SERVERS = {
 
 const FIXED_ROOM_ID = 'SECURE_CHAT_MAIN';
 
+let swRegistration: ServiceWorkerRegistration | null = null;
+
+const registerServiceWorker = async () => {
+  if ('serviceWorker' in navigator) {
+    try {
+      swRegistration = await navigator.serviceWorker.register('/sw.js');
+      console.log('Service Worker registered');
+    } catch (err) {
+      console.log('Service Worker registration failed:', err);
+    }
+  }
+};
+
 const requestNotificationPermission = async () => {
   if ('Notification' in window && Notification.permission === 'default') {
-    await Notification.requestPermission();
+    const permission = await Notification.requestPermission();
+    if (permission === 'granted') {
+      registerServiceWorker();
+    }
+  } else if (Notification.permission === 'granted') {
+    registerServiceWorker();
   }
 };
 
 const showBrowserNotification = (title: string, body: string, icon?: string) => {
   if ('Notification' in window && Notification.permission === 'granted') {
-    if (document.hidden) {
-      new Notification(title, { body, icon: icon || '/favicon.ico', tag: 'chat-notification' });
+    // Try Service Worker notification first (works in background)
+    if (swRegistration) {
+      swRegistration.showNotification(title, {
+        body,
+        icon: icon || '/favicon.png',
+        tag: 'chat-notification',
+        vibrate: [200, 100, 200]
+      } as NotificationOptions);
+    } else if (document.hidden) {
+      // Fallback to regular notification
+      new Notification(title, { body, icon: icon || '/favicon.png', tag: 'chat-notification' });
     }
   }
 };
