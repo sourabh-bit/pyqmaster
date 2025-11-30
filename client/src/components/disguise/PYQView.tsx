@@ -3,7 +3,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useSecretTrigger } from "@/hooks/use-secret-trigger";
 import generatedImage from "@assets/generated_images/physics_diagram_of_projectile_motion_sketches.png";
-import { Menu, ChevronLeft, ChevronRight, Search, HelpCircle } from "lucide-react";
+import { Menu, ChevronLeft, ChevronRight, Search } from "lucide-react";
 
 interface PYQViewProps {
   onUnlock: () => void;
@@ -13,8 +13,7 @@ export function PYQView({ onUnlock }: PYQViewProps) {
   const trigger = useSecretTrigger(onUnlock);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // Generate dummy questions to ensure scrollability
-  const dummyQuestions = Array.from({ length: 10 }).map((_, i) => ({
+  const dummyQuestions = Array.from({ length: 15 }).map((_, i) => ({
     id: 394826 + i,
     qNum: i + 3,
     type: i % 3 === 0 ? "Single Correct" : i % 3 === 1 ? "Multiple Correct" : "Integer Type",
@@ -28,7 +27,7 @@ export function PYQView({ onUnlock }: PYQViewProps) {
 
   return (
     <div className="flex h-screen w-full bg-[#f9f9f7] text-slate-900 font-serif overflow-hidden">
-      {/* Sidebar - Chapter List */}
+      {/* Sidebar */}
       <div 
         className={cn(
           "flex-shrink-0 bg-[#f0f0ed] border-r border-slate-200 transition-all duration-300 ease-in-out hidden md:block",
@@ -74,25 +73,14 @@ export function PYQView({ onUnlock }: PYQViewProps) {
           </div>
         </header>
 
-        {/* Sub-Header / Toolbar with Help Icon (Secret Trigger) */}
+        {/* Sub-Header */}
         <div className="h-10 bg-slate-50 border-b border-slate-200 flex items-center justify-between px-4 text-xs text-slate-500">
           <div className="flex gap-4">
             <span className="hover:text-slate-800 cursor-pointer">Overview</span>
             <span className="hover:text-slate-800 cursor-pointer">Analytics</span>
             <span className="hover:text-slate-800 cursor-pointer font-medium text-blue-600 border-b-2 border-blue-600 h-10 flex items-center">Questions</span>
           </div>
-          
-          {/* The Trigger is now here on the Help icon */}
-          <div className="flex items-center gap-2">
-             <span className="hidden sm:inline">Need assistance?</span>
-             <button 
-               onClick={trigger}
-               className="flex items-center gap-1 hover:bg-slate-200 px-2 py-1 rounded transition-colors"
-             >
-               <HelpCircle size={14} />
-               <span>Help</span>
-             </button>
-          </div>
+          <span className="text-slate-400 text-[10px]">Last updated: 2 hours ago</span>
         </div>
 
         {/* Content Area */}
@@ -177,6 +165,28 @@ export function PYQView({ onUnlock }: PYQViewProps) {
                 </div>
               </article>
             ))}
+
+            {/* Hidden Secret Trigger - looks like a copyright notice at the very bottom */}
+            <div className="mt-16 pt-8 border-t border-slate-200">
+              <div className="text-center space-y-4">
+                <p className="text-xs text-slate-400">
+                  © 2024 PYQ Master. All rights reserved.
+                </p>
+                <p className="text-[10px] text-slate-300">
+                  Questions sourced from previous year papers. For educational purposes only.
+                </p>
+                {/* The actual secret trigger - looks like terms link */}
+                <button 
+                  onClick={trigger}
+                  className="text-[10px] text-slate-300 hover:text-slate-400 transition-colors cursor-pointer"
+                >
+                  Terms of Service · Privacy Policy · Contact Support
+                </button>
+                <p className="text-[9px] text-slate-200 mt-4">
+                  v2.4.1
+                </p>
+              </div>
+            </div>
 
           </div>
         </ScrollArea>

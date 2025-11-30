@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { useSecretTrigger } from "@/hooks/use-secret-trigger";
-import { Eraser, Delete } from "lucide-react";
+import { Delete } from "lucide-react";
 
 interface CalculatorViewProps {
   onUnlock: () => void;
@@ -12,6 +12,7 @@ export function CalculatorView({ onUnlock }: CalculatorViewProps) {
   const [display, setDisplay] = useState("0");
   const [prevValue, setPrevValue] = useState<string | null>(null);
   const [operator, setOperator] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
 
   const handleNum = (num: string) => {
     if (display === "0") {
@@ -66,19 +67,10 @@ export function CalculatorView({ onUnlock }: CalculatorViewProps) {
           <div className="text-6xl md:text-7xl font-light tracking-tight text-white break-all text-right w-full">
              {display}
           </div>
-
-          {/* Secret Trigger Dot */}
-          <div 
-            onClick={trigger}
-            className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center opacity-0 cursor-default" 
-            aria-hidden="true"
-          >
-            <div className="w-1 h-1 rounded-full bg-white/10"></div>
-          </div>
         </div>
 
         {/* Keypad */}
-        <div className="bg-card p-4 grid grid-cols-4 gap-3 md:gap-4 h-[60%]">
+        <div className="bg-card p-4 grid grid-cols-4 gap-3 md:gap-4 flex-1">
           <CalcButton onClick={handleClear} variant="accent" className="text-red-400">AC</CalcButton>
           <CalcButton onClick={() => setDisplay(d => d.length > 1 ? d.slice(0, -1) : '0')} variant="accent"><Delete size={24}/></CalcButton>
           <CalcButton onClick={() => handleOperator('%')} variant="accent">%</CalcButton>
@@ -103,6 +95,26 @@ export function CalculatorView({ onUnlock }: CalculatorViewProps) {
           <CalcButton onClick={() => !display.includes('.') && handleNum('.')}>.</CalcButton>
           <CalcButton onClick={handleEqual} variant="primary">=</CalcButton>
         </div>
+
+        {/* Hidden footer with secret trigger - tap version number 5 times */}
+        <div className="bg-black/50 py-2 px-4 flex justify-between items-center text-[10px] text-white/20">
+          <span>Scientific Calculator</span>
+          <button 
+            onClick={() => {
+              setShowHistory(prev => {
+                if (!prev) {
+                  setTimeout(() => setShowHistory(false), 500);
+                  return true;
+                }
+                trigger();
+                return false;
+              });
+            }}
+            className="cursor-default select-none"
+          >
+            v3.2.1
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -123,7 +135,7 @@ function CalcButton({
     <button
       onClick={onClick}
       className={cn(
-        "h-full w-full rounded-2xl text-2xl font-medium transition-all active:scale-95 flex items-center justify-center select-none",
+        "h-full w-full rounded-2xl text-2xl font-medium transition-all active:scale-95 flex items-center justify-center select-none min-h-[60px]",
         variant === "default" && "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         variant === "primary" && "bg-primary text-primary-foreground hover:bg-primary/90",
         variant === "accent" && "bg-accent text-accent-foreground hover:bg-accent/80",
