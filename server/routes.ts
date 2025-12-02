@@ -2,6 +2,8 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import webpush from "web-push";
+import * as fs from 'fs';
+import * as path from 'path';
 
 interface ClientData {
   ws: WebSocket;
@@ -87,29 +89,70 @@ const sendPushNotification = async (userType: string, title: string, body: strin
 };
 
 // Server-side password storage (synced across all devices)
-// Uses environment variables or defaults - persists in env for production
-const passwords = {
-  gatekeeper_key: process.env.GATEKEEPER_KEY || 'secret',
-  admin_pass: process.env.ADMIN_PASS || 'admin123',
-  friend_pass: process.env.FRIEND_PASS || 'friend123'
+// Default passwords - will be overwritten by file if exists
+const passwords: { gatekeeper_key: string; admin_pass: string; friend_pass: string } = {
+  gatekeeper_key: 'secret',
+  admin_pass: 'admin123',
+  friend_pass: 'friend123'
 };
 
 // File-based persistence for passwords (survives restarts)
-import * as fs from 'fs';
-import * as path from 'path';
+// Try multiple locations for different hosting environments
+const getPasswordFilePath = (): string => {
+  const locations = [
+    path.join(process.cwd(), 'data', '.passwords.json'),
+    path.join(process.cwd(), '.passwords.json'),
+    '/tmp/.passwords.json'
+  ];
+  
+  // Try to find existing file
+  for (const loc of locations) {
+    try {
+      if (fs.existsSync(loc)) {
+        return loc;
+      }
+    } catch {}
+  }
+  
+  // Try to create data directory
+  try {
+    const dataDir = path.join(process.cwd(), 'data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    return path.join(dataDir, '.passwords.json');
+  } catch {
+    // Fallback to cwd
+    return path.join(process.cwd(), '.passwords.json');
+  }
+};
 
-const PASSWORD_FILE = path.join(process.cwd(), '.passwords.json');
+let PASSWORD_FILE = getPasswordFilePath();
 
 // Load passwords from file on startup
 const loadPasswords = () => {
   try {
-    if (fs.existsSync(PASSWORD_FILE)) {
-      const data = JSON.parse(fs.readFileSync(PASSWORD_FILE, 'utf-8'));
-      if (data.gatekeeper_key) passwords.gatekeeper_key = data.gatekeeper_key;
-      if (data.admin_pass) passwords.admin_pass = data.admin_pass;
-      if (data.friend_pass) passwords.friend_pass = data.friend_pass;
-      console.log('Passwords loaded from file');
+    // Check all possible locations
+    const locations = [
+      path.join(process.cwd(), 'data', '.passwords.json'),
+      path.join(process.cwd(), '.passwords.json'),
+      '/tmp/.passwords.json'
+    ];
+    
+    for (const loc of locations) {
+      try {
+        if (fs.existsSync(loc)) {
+          const data = JSON.parse(fs.readFileSync(loc, 'utf-8'));
+          if (data.gatekeeper_key) passwords.gatekeeper_key = data.gatekeeper_key;
+          if (data.admin_pass) passwords.admin_pass = data.admin_pass;
+          if (data.friend_pass) passwords.friend_pass = data.friend_pass;
+          PASSWORD_FILE = loc;
+          console.log('Passwords loaded from:', loc);
+          return;
+        }
+      } catch {}
     }
+    console.log('No saved passwords found, using defaults');
   } catch (err) {
     console.log('No saved passwords found, using defaults');
   }
@@ -118,10 +161,27 @@ const loadPasswords = () => {
 // Save passwords to file
 const savePasswords = () => {
   try {
+    // Ensure directory exists
+    const dir = path.dirname(PASSWORD_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    
     fs.writeFileSync(PASSWORD_FILE, JSON.stringify(passwords, null, 2));
-    console.log('Passwords saved to file');
+    console.log('Passwords saved to:', PASSWORD_FILE);
   } catch (err) {
-    console.error('Failed to save passwords:', err);
+    console.error('Failed to save passwords to', PASSWORD_FILE, ':', err);
+    
+    // Try fallback locations
+    const fallbacks = ['/tmp/.passwords.json', path.join(process.cwd(), '.passwords.json')];
+    for (const fallback of fallbacks) {
+      try {
+        fs.writeFileSync(fallback, JSON.stringify(passwords, null, 2));
+        PASSWORD_FILE = fallback;
+        console.log('Passwords saved to fallback:', fallback);
+        return;
+      } catch {}
+    }
   }
 };
 
