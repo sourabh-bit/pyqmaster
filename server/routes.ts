@@ -185,8 +185,12 @@ const savePasswords = () => {
   }
 };
 
-// Load on startup
-loadPasswords();
+// Load on startup (wrapped in try-catch to prevent crash)
+try {
+  loadPasswords();
+} catch (err) {
+  console.error('Failed to load passwords on startup:', err);
+}
 
 const broadcastToUserType = (room: RoomData, userType: string, data: any, excludeWs?: WebSocket) => {
   room.clients.forEach((client, clientWs) => {
