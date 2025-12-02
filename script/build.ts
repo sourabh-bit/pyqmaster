@@ -31,6 +31,7 @@ const allowlist = [
   "passport-local",
   "stripe",
   "uuid",
+  "web-push",
   "ws",
   "xlsx",
   "zod",
