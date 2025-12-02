@@ -243,6 +243,13 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const currentCallType = useRef<'voice' | 'video' | null>(null);
+  
+  // Unique device ID for message sync
+  const deviceId = useRef<string>(localStorage.getItem('device_id') || (() => {
+    const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    localStorage.setItem('device_id', id);
+    return id;
+  })());
 
   useEffect(() => {
     localStorage.setItem('chat_messages', JSON.stringify(messages));
@@ -295,7 +302,8 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         type: 'join', 
         roomId: FIXED_ROOM_ID,
         profile: { name: myProfile.name, avatar: myProfile.avatar },
-        userType: userType
+        userType: userType,
+        deviceId: deviceId.current
       }));
       setIsConnected(true);
       if (reconnectTimeoutRef.current) {
@@ -480,6 +488,39 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         setMessages([]);
         localStorage.removeItem('chat_messages');
         toast({ title: "🚨 All messages wiped", variant: "destructive" });
+        break;
+      
+      case 'sync-request':
+        // Another device of same user type is requesting our messages
+        const currentMessages = JSON.parse(localStorage.getItem('chat_messages') || '[]');
+        sendSignal({
+          type: 'sync-response',
+          targetDeviceId: data.targetDeviceId,
+          messages: currentMessages
+        });
+        break;
+      
+      case 'sync-messages':
+        // Received messages from another device - merge them
+        if (data.messages && Array.isArray(data.messages)) {
+          setMessages(prev => {
+            const existingIds = new Set(prev.map(m => m.id));
+            const newMessages = data.messages
+              .filter((m: any) => !existingIds.has(m.id))
+              .map((m: any) => ({
+                ...m,
+                timestamp: new Date(m.timestamp)
+              }));
+            
+            if (newMessages.length > 0) {
+              const merged = [...prev, ...newMessages].sort(
+                (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+              );
+              return merged;
+            }
+            return prev;
+          });
+        }
         break;
     }
   };

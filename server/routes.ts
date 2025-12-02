@@ -352,6 +352,17 @@ export async function registerRoutes(
             peerOnline: peerOnline
           }));
           
+          // Request message sync from other devices of same user type
+          room.clients.forEach((client, clientWs) => {
+            if (client.userType === myUserType && clientWs !== ws && clientWs.readyState === WebSocket.OPEN) {
+              // Ask existing device to share its messages with new device
+              clientWs.send(JSON.stringify({ 
+                type: "sync-request",
+                targetDeviceId: myDeviceId
+              }));
+            }
+          });
+          
           // Deliver pending messages
           const roomPendingKey = `${roomId}_${myUserType}`;
           const pending = pendingMessages.get(roomPendingKey);
@@ -477,6 +488,20 @@ export async function registerRoutes(
             type: 'message-status',
             ids: data.ids,
             status: 'read'
+          });
+
+        } else if (type === "sync-response" && currentRoom) {
+          // Forward sync response to the target device
+          const room = rooms.get(currentRoom);
+          if (!room) return;
+          
+          room.clients.forEach((client, clientWs) => {
+            if (client.deviceId === data.targetDeviceId && clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: "sync-messages",
+                messages: data.messages
+              }));
+            }
           });
 
         } else if (type === "emergency-wipe" && currentRoom) {
