@@ -39,6 +39,7 @@ const allowlist = [
 ];
 
 async function buildAll() {
+  console.log("Removing dist folder...");
   await rm("dist", { recursive: true, force: true });
 
   console.log("building client...");
@@ -52,7 +53,7 @@ async function buildAll() {
   ];
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
 
-  await esbuild({
+  const result = await esbuild({
     entryPoints: ["server/index.ts"],
     platform: "node",
     bundle: true,
@@ -68,6 +69,18 @@ async function buildAll() {
       "@shared": path.resolve(rootDir, "shared"),
     },
   });
+
+  console.log("Server build result:", result);
+  
+  // Verify the output file exists
+  const { stat } = await import("fs/promises");
+  try {
+    const stats = await stat("dist/index.cjs");
+    console.log("dist/index.cjs created, size:", stats.size, "bytes");
+  } catch (e) {
+    console.error("ERROR: dist/index.cjs was not created!");
+    process.exit(1);
+  }
 }
 
 buildAll().catch((err) => {
