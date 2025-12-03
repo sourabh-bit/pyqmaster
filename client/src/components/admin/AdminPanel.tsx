@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
-import { Shield, Trash2, Clock, Key, Save, AlertTriangle, Users, Activity, MessageSquare, Image } from "lucide-react";
+import { Shield, Trash2, Clock, Key, Save, AlertTriangle, Users, Activity, MessageSquare, Eye, EyeOff, CheckCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { format } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 
 interface AdminPanelProps {
   isOpen: boolean;
@@ -19,34 +19,50 @@ interface Message {
   type: string;
 }
 
+interface PasswordInfo {
+  gatekeeper_key: string;
+  admin_pass: string;
+  friend_pass: string;
+  admin_pass_changed_at: string | null;
+  friend_pass_changed_at: string | null;
+  gatekeeper_changed_at: string | null;
+}
+
 export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
   const { toast } = useToast();
   
-  const [activeTab, setActiveTab] = useState<'settings' | 'data' | 'logs'>('settings');
+  const [activeTab, setActiveTab] = useState<'security' | 'data' | 'logs'>('security');
   const [gatekeeperKey, setGatekeeperKey] = useState('secret');
   const [adminPass, setAdminPass] = useState('admin123');
   const [friendPass, setFriendPass] = useState('friend123');
-  const [originalAdminPass, setOriginalAdminPass] = useState('admin123'); // Store original for verification
+  const [originalAdminPass, setOriginalAdminPass] = useState('admin123');
   const [expiry, setExpiry] = useState(localStorage.getItem('message_expiry') || '24h');
   const [showNukeConfirm, setShowNukeConfirm] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [connectionLogs, setConnectionLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  
+  const [showPasswords, setShowPasswords] = useState(false);
+  const [adminPassChangedAt, setAdminPassChangedAt] = useState<string | null>(null);
+  const [friendPassChangedAt, setFriendPassChangedAt] = useState<string | null>(null);
+  const [gatekeeperChangedAt, setGatekeeperChangedAt] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
 
-  // Fetch passwords from server when panel opens
   useEffect(() => {
     if (isOpen) {
       setMessages(JSON.parse(localStorage.getItem('chat_messages') || '[]'));
       setConnectionLogs(JSON.parse(localStorage.getItem('connection_logs') || '[]'));
       
-      // Fetch current passwords from server
       fetch('/api/auth/passwords', { cache: 'no-store' })
         .then(res => res.json())
-        .then(data => {
+        .then((data: PasswordInfo) => {
           setGatekeeperKey(data.gatekeeper_key || 'secret');
           setAdminPass(data.admin_pass || 'admin123');
           setFriendPass(data.friend_pass || 'friend123');
-          setOriginalAdminPass(data.admin_pass || 'admin123'); // Store for verification
+          setOriginalAdminPass(data.admin_pass || 'admin123');
+          setAdminPassChangedAt(data.admin_pass_changed_at);
+          setFriendPassChangedAt(data.friend_pass_changed_at);
+          setGatekeeperChangedAt(data.gatekeeper_changed_at);
         })
         .catch(err => {
           console.error('Failed to load passwords:', err);
@@ -57,7 +73,6 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
   const handleSave = async () => {
     setLoading(true);
     try {
-      // Save passwords to server using original admin password for verification
       const response = await fetch('/api/auth/passwords', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -65,22 +80,30 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
           gatekeeper_key: gatekeeperKey,
           admin_pass: adminPass,
           friend_pass: friendPass,
-          current_password: originalAdminPass // Use original password for verification
+          current_password: originalAdminPass
         })
       });
       
       if (!response.ok) {
-        toast({ variant: "destructive", title: "Failed to save settings" });
+        const error = await response.json();
+        toast({ variant: "destructive", title: error.error || "Failed to save settings" });
         return;
       }
       
-      // Update original password reference after successful save
-      setOriginalAdminPass(adminPass);
+      const result = await response.json();
       
-      // Save expiry to localStorage (client-side only feature)
+      if (result.passwords) {
+        setOriginalAdminPass(result.passwords.admin_pass);
+        setAdminPassChangedAt(result.passwords.admin_pass_changed_at);
+        setFriendPassChangedAt(result.passwords.friend_pass_changed_at);
+        setGatekeeperChangedAt(result.passwords.gatekeeper_changed_at);
+      }
+      
       localStorage.setItem('message_expiry', expiry);
       
-      toast({ title: "Settings Saved!" });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      toast({ title: "Settings saved permanently! Passwords will persist across restarts." });
     } catch (err) {
       toast({ variant: "destructive", title: "Failed to save settings" });
     } finally {
@@ -103,6 +126,16 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
     onClose();
   };
 
+  const formatChangedAt = (date: string | null) => {
+    if (!date) return 'Never changed (using default)';
+    try {
+      const d = new Date(date);
+      return `${format(d, 'MMM d, yyyy h:mm a')} (${formatDistanceToNow(d, { addSuffix: true })})`;
+    } catch {
+      return 'Unknown';
+    }
+  };
+
   const stats = {
     total: messages.length,
     text: messages.filter(m => m.type === 'text').length,
@@ -112,8 +145,8 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="w-[95vw] max-w-2xl bg-zinc-950 text-zinc-100 border-zinc-800 max-h-[85vh] overflow-hidden flex flex-col p-3 sm:p-6">
-        <DialogHeader className="pb-2">
+      <DialogContent className="w-[95vw] max-w-2xl bg-zinc-950 text-zinc-100 border-zinc-800 max-h-[90vh] overflow-hidden flex flex-col p-3 sm:p-6">
+        <DialogHeader className="pb-2 flex-shrink-0">
           <div className="flex items-center gap-2 sm:gap-3">
             <div className="p-1.5 sm:p-2 bg-red-500/10 rounded-full text-red-500">
               <Shield size={20} className="sm:w-6 sm:h-6" />
@@ -128,9 +161,9 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
         </DialogHeader>
 
         {/* Tabs */}
-        <div className="flex gap-1 sm:gap-2 border-b border-zinc-800 pb-2 overflow-x-auto">
+        <div className="flex gap-1 sm:gap-2 border-b border-zinc-800 pb-2 overflow-x-auto flex-shrink-0">
           {[
-            { id: 'settings', label: 'Settings', icon: Key },
+            { id: 'security', label: 'Security', icon: Key },
             { id: 'data', label: 'Data', icon: MessageSquare },
             { id: 'logs', label: 'Logs', icon: Activity }
           ].map(tab => (
@@ -150,47 +183,101 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
 
         <div className="flex-1 overflow-y-auto py-3 sm:py-4 space-y-4 sm:space-y-6">
           
-          {/* Settings Tab */}
-          {activeTab === 'settings' && (
+          {/* Security Tab */}
+          {activeTab === 'security' && (
             <>
-              <div className="space-y-3 p-3 sm:p-4 bg-zinc-900/50 rounded-lg border border-zinc-800">
-                <h3 className="text-xs sm:text-sm font-medium text-zinc-300 flex items-center gap-2">
-                  <Key size={14} /> Shared Secret Key
-                </h3>
-                <input 
-                  type="text" 
-                  value={gatekeeperKey}
-                  onChange={(e) => setGatekeeperKey(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono focus:border-yellow-500 outline-none"
-                />
+              {/* Password Visibility Toggle */}
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setShowPasswords(!showPasswords)}
+                  className="flex items-center gap-2 text-xs text-zinc-400 hover:text-white transition-colors px-3 py-1.5 rounded-lg hover:bg-zinc-800"
+                >
+                  {showPasswords ? <EyeOff size={14} /> : <Eye size={14} />}
+                  {showPasswords ? 'Hide Passwords' : 'Show Passwords'}
+                </button>
               </div>
 
+              {/* Shared Secret Key */}
               <div className="space-y-3 p-3 sm:p-4 bg-zinc-900/50 rounded-lg border border-zinc-800">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs sm:text-sm font-medium text-zinc-300 flex items-center gap-2">
+                    <Key size={14} /> Shared Secret Key
+                  </h3>
+                  {gatekeeperChangedAt && (
+                    <span className="text-[10px] text-green-500 flex items-center gap-1">
+                      <CheckCircle size={10} /> Custom
+                    </span>
+                  )}
+                </div>
+                <input 
+                  type={showPasswords ? "text" : "password"}
+                  value={gatekeeperKey}
+                  onChange={(e) => setGatekeeperKey(e.target.value)}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2.5 text-sm font-mono focus:border-yellow-500 outline-none"
+                />
+                <p className="text-[10px] text-zinc-500">
+                  Last changed: {formatChangedAt(gatekeeperChangedAt)}
+                </p>
+              </div>
+
+              {/* User Passwords */}
+              <div className="space-y-4 p-3 sm:p-4 bg-zinc-900/50 rounded-lg border border-zinc-800">
                 <h3 className="text-xs sm:text-sm font-medium text-zinc-300 flex items-center gap-2">
-                  <Users size={14} /> User PINs
+                  <Users size={14} /> User Passwords
                 </h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] sm:text-xs text-zinc-500">Admin</label>
-                    <input 
-                      type="text" 
-                      value={adminPass}
-                      onChange={(e) => setAdminPass(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 sm:px-3 py-2 text-sm font-mono focus:border-red-500 outline-none"
-                    />
+                
+                {/* Admin Password */}
+                <div className="space-y-2 p-3 bg-zinc-800/50 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs text-zinc-400 flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                      Admin Password
+                    </label>
+                    {adminPassChangedAt && (
+                      <span className="text-[10px] text-green-500 flex items-center gap-1">
+                        <CheckCircle size={10} /> Custom
+                      </span>
+                    )}
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] sm:text-xs text-zinc-500">Friend</label>
-                    <input 
-                      type="text" 
-                      value={friendPass}
-                      onChange={(e) => setFriendPass(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 sm:px-3 py-2 text-sm font-mono focus:border-blue-500 outline-none"
-                    />
+                  <input 
+                    type={showPasswords ? "text" : "password"}
+                    value={adminPass}
+                    onChange={(e) => setAdminPass(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2.5 text-sm font-mono focus:border-red-500 outline-none"
+                    placeholder="Enter admin password"
+                  />
+                  <p className="text-[10px] text-zinc-500">
+                    Last changed: {formatChangedAt(adminPassChangedAt)}
+                  </p>
+                </div>
+
+                {/* Friend Password */}
+                <div className="space-y-2 p-3 bg-zinc-800/50 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs text-zinc-400 flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                      Friend Password
+                    </label>
+                    {friendPassChangedAt && (
+                      <span className="text-[10px] text-green-500 flex items-center gap-1">
+                        <CheckCircle size={10} /> Custom
+                      </span>
+                    )}
                   </div>
+                  <input 
+                    type={showPasswords ? "text" : "password"}
+                    value={friendPass}
+                    onChange={(e) => setFriendPass(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2.5 text-sm font-mono focus:border-blue-500 outline-none"
+                    placeholder="Enter friend password"
+                  />
+                  <p className="text-[10px] text-zinc-500">
+                    Last changed: {formatChangedAt(friendPassChangedAt)}
+                  </p>
                 </div>
               </div>
 
+              {/* Message Retention */}
               <div className="space-y-3 p-3 sm:p-4 bg-zinc-900/50 rounded-lg border border-zinc-800">
                 <h3 className="text-xs sm:text-sm font-medium text-zinc-300 flex items-center gap-2">
                   <Clock size={14} /> Message Retention
@@ -201,18 +288,47 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
                       key={opt}
                       onClick={() => setExpiry(opt)}
                       className={cn(
-                        "px-2 sm:px-3 py-2 rounded text-xs sm:text-sm border",
-                        expiry === opt ? "bg-zinc-100 text-zinc-900 border-zinc-100" : "bg-zinc-950 text-zinc-400 border-zinc-800"
+                        "px-2 sm:px-3 py-2 rounded text-xs sm:text-sm border transition-all",
+                        expiry === opt ? "bg-zinc-100 text-zinc-900 border-zinc-100" : "bg-zinc-950 text-zinc-400 border-zinc-800 hover:border-zinc-600"
                       )}
                     >
-                      {opt === 'view' ? 'View' : opt}
+                      {opt === 'view' ? 'View Once' : opt}
                     </button>
                   ))}
                 </div>
               </div>
 
-              <button onClick={handleSave} className="w-full py-2.5 sm:py-3 bg-white text-black rounded-lg font-medium text-sm flex items-center justify-center gap-2">
-                <Save size={16} /> Save
+              {/* Important Notice */}
+              <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                <p className="text-xs text-green-400 flex items-start gap-2">
+                  <CheckCircle size={14} className="flex-shrink-0 mt-0.5" />
+                  <span>
+                    Passwords are saved permanently to the server. They will NOT reset after restart or redeployment.
+                  </span>
+                </p>
+              </div>
+
+              {/* Save Button */}
+              <button 
+                onClick={handleSave} 
+                disabled={loading}
+                className={cn(
+                  "w-full py-2.5 sm:py-3 rounded-lg font-medium text-sm flex items-center justify-center gap-2 transition-all",
+                  saved 
+                    ? "bg-green-500 text-white" 
+                    : "bg-white text-black hover:bg-zinc-200",
+                  loading && "opacity-50 cursor-wait"
+                )}
+              >
+                {saved ? (
+                  <>
+                    <CheckCircle size={16} /> Saved!
+                  </>
+                ) : (
+                  <>
+                    <Save size={16} /> Save All Settings
+                  </>
+                )}
               </button>
             </>
           )}
@@ -246,7 +362,7 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
                           "px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium flex-shrink-0",
                           msg.sender === 'me' ? "bg-red-500/20 text-red-400" : "bg-blue-500/20 text-blue-400"
                         )}>
-                          {msg.sender === 'me' ? 'Me' : 'Them'}
+                          {msg.sender === 'me' ? 'Admin' : 'Friend'}
                         </span>
                         <span className="truncate text-zinc-300 flex-1">{msg.text || `[${msg.type}]`}</span>
                         <span className="text-zinc-600 flex-shrink-0">
@@ -289,11 +405,11 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
           )}
 
           {/* Danger Zone */}
-          <div className="pt-3 sm:pt-4 border-t border-zinc-800">
+          <div className="pt-3 sm:pt-4 border-t border-zinc-800 flex-shrink-0">
             {!showNukeConfirm ? (
               <button 
                 onClick={() => setShowNukeConfirm(true)}
-                className="w-full py-2.5 sm:py-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg border border-red-500/20 flex items-center justify-center gap-2 text-xs sm:text-sm font-medium"
+                className="w-full py-2.5 sm:py-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg border border-red-500/20 flex items-center justify-center gap-2 text-xs sm:text-sm font-medium transition-colors"
               >
                 <Trash2 size={16} /> Emergency Wipe
               </button>
@@ -302,8 +418,8 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
                 <div className="flex items-start gap-2 text-red-500 mb-3">
                   <AlertTriangle size={18} className="flex-shrink-0 mt-0.5" />
                   <div className="text-xs sm:text-sm">
-                    <p className="font-bold">Delete all data?</p>
-                    <p className="opacity-80">This cannot be undone.</p>
+                    <p className="font-bold">Delete all message data?</p>
+                    <p className="opacity-80">This will NOT affect passwords.</p>
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -311,7 +427,7 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
                     Cancel
                   </button>
                   <button onClick={handleNuke} className="flex-1 py-2 bg-red-600 text-white rounded text-xs sm:text-sm font-bold">
-                    WIPE
+                    WIPE DATA
                   </button>
                 </div>
               </div>

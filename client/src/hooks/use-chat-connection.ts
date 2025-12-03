@@ -10,6 +10,11 @@ interface Message {
   mediaUrl?: string;
   senderName?: string;
   status?: 'sending' | 'sent' | 'delivered' | 'read';
+  replyTo?: {
+    id: string;
+    text: string;
+    sender: 'me' | 'them';
+  };
 }
 
 interface UserProfile {
@@ -403,7 +408,8 @@ export function useChatConnection(userType: 'admin' | 'friend') {
           type: data.messageType || 'text',
           mediaUrl: data.mediaUrl,
           senderName: msgSenderName,
-          status: data.status || 'delivered'
+          status: data.status || 'delivered',
+          replyTo: data.replyTo
         };
         
         // Avoid duplicates
@@ -544,7 +550,8 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       type: msg.type || 'text',
       mediaUrl: msg.mediaUrl,
       senderName: myProfile.name,
-      status: peerConnected ? 'delivered' : 'sending'
+      status: peerConnected ? 'delivered' : 'sending',
+      replyTo: msg.replyTo
     };
 
     setMessages(prev => [...prev, newMsg]);
@@ -557,7 +564,8 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       messageType: newMsg.type,
       mediaUrl: newMsg.mediaUrl,
       timestamp: newMsg.timestamp.toISOString(),
-      senderName: myProfile.name
+      senderName: myProfile.name,
+      replyTo: newMsg.replyTo
     });
 
     return newMsg;

@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import webpush from "web-push";
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 
 interface ClientData {
   ws: WebSocket;
@@ -36,25 +37,33 @@ interface PushSubscriptionData {
   };
 }
 
+interface PasswordData {
+  gatekeeper_key: string;
+  admin_pass: string;
+  friend_pass: string;
+  admin_pass_hash?: string;
+  friend_pass_hash?: string;
+  admin_pass_changed_at?: string;
+  friend_pass_changed_at?: string;
+  gatekeeper_changed_at?: string;
+  initialized: boolean;
+}
+
 const rooms = new Map<string, RoomData>();
 const pendingMessages = new Map<string, PendingMessage[]>();
 const messageStatus = new Map<string, 'sent' | 'delivered' | 'read'>();
 
-// Store push subscriptions by user type
 const pushSubscriptions = new Map<string, PushSubscriptionData[]>();
 
-// VAPID keys for web push (generate your own for production)
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BLBz8nXqJ3H5VSJgNPaF1N7p0_VfQKZwzPvHRmqIKvE4EHlpjBqeGMx5PaJk9R7VxTkNh3n_WbE2OqK8yXlH8Aw';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'dGnKX_4nRqH5VSJgNPaF1N7p0_VfQKZwzPvHRmqIKvE';
 
-// Configure web-push
 webpush.setVapidDetails(
   'mailto:admin@securechat.com',
   VAPID_PUBLIC_KEY,
   VAPID_PRIVATE_KEY
 );
 
-// Send push notification to offline users
 const sendPushNotification = async (userType: string, title: string, body: string) => {
   const subscriptions = pushSubscriptions.get(userType) || [];
   const validSubscriptions: PushSubscriptionData[] = [];
@@ -71,7 +80,6 @@ const sendPushNotification = async (userType: string, title: string, body: strin
       validSubscriptions.push(subscription);
     } catch (error: any) {
       if (error.statusCode === 410 || error.statusCode === 404) {
-        // Subscription expired or invalid, don't keep it
         console.log('Removing invalid push subscription');
       } else {
         validSubscriptions.push(subscription);
@@ -80,7 +88,6 @@ const sendPushNotification = async (userType: string, title: string, body: strin
     }
   }
   
-  // Update with only valid subscriptions
   if (validSubscriptions.length > 0) {
     pushSubscriptions.set(userType, validSubscriptions);
   } else {
@@ -88,16 +95,23 @@ const sendPushNotification = async (userType: string, title: string, body: strin
   }
 };
 
-// Server-side password storage (synced across all devices)
-// Default passwords - will be overwritten by file if exists
-const passwords: { gatekeeper_key: string; admin_pass: string; friend_pass: string } = {
-  gatekeeper_key: 'secret',
-  admin_pass: 'admin123',
-  friend_pass: 'friend123'
+const hashPassword = (password: string): string => {
+  return crypto.createHash('sha256').update(password).digest('hex');
 };
 
-// File-based persistence for passwords (survives restarts)
-// Try multiple locations for different hosting environments
+const verifyPassword = (password: string, hash: string): boolean => {
+  return hashPassword(password) === hash;
+};
+
+const DEFAULT_PASSWORDS: PasswordData = {
+  gatekeeper_key: 'secret',
+  admin_pass: 'admin123',
+  friend_pass: 'friend123',
+  initialized: false
+};
+
+let passwords: PasswordData = { ...DEFAULT_PASSWORDS };
+
 const getPasswordFilePath = (): string => {
   const locations = [
     path.join(process.cwd(), 'data', '.passwords.json'),
@@ -105,7 +119,6 @@ const getPasswordFilePath = (): string => {
     '/tmp/.passwords.json'
   ];
   
-  // Try to find existing file
   for (const loc of locations) {
     try {
       if (fs.existsSync(loc)) {
@@ -114,7 +127,6 @@ const getPasswordFilePath = (): string => {
     } catch {}
   }
   
-  // Try to create data directory
   try {
     const dataDir = path.join(process.cwd(), 'data');
     if (!fs.existsSync(dataDir)) {
@@ -122,17 +134,14 @@ const getPasswordFilePath = (): string => {
     }
     return path.join(dataDir, '.passwords.json');
   } catch {
-    // Fallback to cwd
     return path.join(process.cwd(), '.passwords.json');
   }
 };
 
 let PASSWORD_FILE = getPasswordFilePath();
 
-// Load passwords from file on startup
 const loadPasswords = () => {
   try {
-    // Check all possible locations
     const locations = [
       path.join(process.cwd(), 'data', '.passwords.json'),
       path.join(process.cwd(), '.passwords.json'),
@@ -142,50 +151,91 @@ const loadPasswords = () => {
     for (const loc of locations) {
       try {
         if (fs.existsSync(loc)) {
-          const data = JSON.parse(fs.readFileSync(loc, 'utf-8'));
-          if (data.gatekeeper_key) passwords.gatekeeper_key = data.gatekeeper_key;
-          if (data.admin_pass) passwords.admin_pass = data.admin_pass;
-          if (data.friend_pass) passwords.friend_pass = data.friend_pass;
-          PASSWORD_FILE = loc;
-          console.log('Passwords loaded from:', loc);
-          return;
+          const data = JSON.parse(fs.readFileSync(loc, 'utf-8')) as Partial<PasswordData>;
+          
+          if (data.initialized === true) {
+            if (data.gatekeeper_key) passwords.gatekeeper_key = data.gatekeeper_key;
+            if (data.admin_pass) passwords.admin_pass = data.admin_pass;
+            if (data.friend_pass) passwords.friend_pass = data.friend_pass;
+            if (data.admin_pass_hash) passwords.admin_pass_hash = data.admin_pass_hash;
+            if (data.friend_pass_hash) passwords.friend_pass_hash = data.friend_pass_hash;
+            if (data.admin_pass_changed_at) passwords.admin_pass_changed_at = data.admin_pass_changed_at;
+            if (data.friend_pass_changed_at) passwords.friend_pass_changed_at = data.friend_pass_changed_at;
+            if (data.gatekeeper_changed_at) passwords.gatekeeper_changed_at = data.gatekeeper_changed_at;
+            passwords.initialized = true;
+            PASSWORD_FILE = loc;
+            console.log('✓ Passwords loaded from:', loc);
+            console.log('  Admin password changed at:', passwords.admin_pass_changed_at || 'never');
+            console.log('  Friend password changed at:', passwords.friend_pass_changed_at || 'never');
+            return;
+          }
         }
-      } catch {}
+      } catch (e) {
+        console.error('Error reading password file at', loc, ':', e);
+      }
     }
-    console.log('No saved passwords found, using defaults');
+    
+    console.log('No saved passwords found, using defaults (first-time setup)');
+    passwords = { ...DEFAULT_PASSWORDS };
   } catch (err) {
-    console.log('No saved passwords found, using defaults');
+    console.error('Failed to load passwords:', err);
+    passwords = { ...DEFAULT_PASSWORDS };
   }
 };
 
-// Save passwords to file
-const savePasswords = () => {
+const savePasswords = (): boolean => {
   try {
-    // Ensure directory exists
     const dir = path.dirname(PASSWORD_FILE);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
     
-    fs.writeFileSync(PASSWORD_FILE, JSON.stringify(passwords, null, 2));
-    console.log('Passwords saved to:', PASSWORD_FILE);
+    passwords.initialized = true;
+    
+    const dataToSave = {
+      gatekeeper_key: passwords.gatekeeper_key,
+      admin_pass: passwords.admin_pass,
+      friend_pass: passwords.friend_pass,
+      admin_pass_hash: passwords.admin_pass_hash,
+      friend_pass_hash: passwords.friend_pass_hash,
+      admin_pass_changed_at: passwords.admin_pass_changed_at,
+      friend_pass_changed_at: passwords.friend_pass_changed_at,
+      gatekeeper_changed_at: passwords.gatekeeper_changed_at,
+      initialized: true,
+      last_saved: new Date().toISOString()
+    };
+    
+    fs.writeFileSync(PASSWORD_FILE, JSON.stringify(dataToSave, null, 2));
+    console.log('✓ Passwords saved to:', PASSWORD_FILE);
+    return true;
   } catch (err) {
     console.error('Failed to save passwords to', PASSWORD_FILE, ':', err);
     
-    // Try fallback locations
     const fallbacks = ['/tmp/.passwords.json', path.join(process.cwd(), '.passwords.json')];
     for (const fallback of fallbacks) {
       try {
-        fs.writeFileSync(fallback, JSON.stringify(passwords, null, 2));
+        const dataToSave = {
+          gatekeeper_key: passwords.gatekeeper_key,
+          admin_pass: passwords.admin_pass,
+          friend_pass: passwords.friend_pass,
+          admin_pass_hash: passwords.admin_pass_hash,
+          friend_pass_hash: passwords.friend_pass_hash,
+          admin_pass_changed_at: passwords.admin_pass_changed_at,
+          friend_pass_changed_at: passwords.friend_pass_changed_at,
+          gatekeeper_changed_at: passwords.gatekeeper_changed_at,
+          initialized: true,
+          last_saved: new Date().toISOString()
+        };
+        fs.writeFileSync(fallback, JSON.stringify(dataToSave, null, 2));
         PASSWORD_FILE = fallback;
-        console.log('Passwords saved to fallback:', fallback);
-        return;
+        console.log('✓ Passwords saved to fallback:', fallback);
+        return true;
       } catch {}
     }
+    return false;
   }
 };
 
-// Load on startup (wrapped in try-catch to prevent crash)
 try {
   loadPasswords();
 } catch (err) {
@@ -213,21 +263,24 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   
-  // Health check endpoint for Render
   app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   });
   
-  // API endpoints for password management
   app.get('/api/auth/passwords', (req, res) => {
-    res.json(passwords);
+    res.json({
+      gatekeeper_key: passwords.gatekeeper_key,
+      admin_pass: passwords.admin_pass,
+      friend_pass: passwords.friend_pass,
+      admin_pass_changed_at: passwords.admin_pass_changed_at || null,
+      friend_pass_changed_at: passwords.friend_pass_changed_at || null,
+      gatekeeper_changed_at: passwords.gatekeeper_changed_at || null
+    });
   });
   
   app.post('/api/auth/passwords', (req, res) => {
     const { gatekeeper_key, admin_pass, friend_pass, current_password } = req.body;
     
-    // Verify current password before allowing changes
-    // Allow if current_password matches either admin or friend password
     const isValidPassword = current_password === passwords.admin_pass || 
                             current_password === passwords.friend_pass;
     
@@ -235,18 +288,49 @@ export async function registerRoutes(
       return res.status(401).json({ error: 'Invalid current password' });
     }
     
-    // Update passwords
-    if (gatekeeper_key) passwords.gatekeeper_key = gatekeeper_key;
-    if (admin_pass) passwords.admin_pass = admin_pass;
-    if (friend_pass) passwords.friend_pass = friend_pass;
+    const now = new Date().toISOString();
+    let changed = false;
     
-    // Save to file for persistence
-    savePasswords();
+    if (gatekeeper_key && gatekeeper_key !== passwords.gatekeeper_key) {
+      passwords.gatekeeper_key = gatekeeper_key;
+      passwords.gatekeeper_changed_at = now;
+      changed = true;
+    }
     
-    res.json({ success: true, passwords });
+    if (admin_pass && admin_pass !== passwords.admin_pass) {
+      passwords.admin_pass = admin_pass;
+      passwords.admin_pass_hash = hashPassword(admin_pass);
+      passwords.admin_pass_changed_at = now;
+      changed = true;
+    }
+    
+    if (friend_pass && friend_pass !== passwords.friend_pass) {
+      passwords.friend_pass = friend_pass;
+      passwords.friend_pass_hash = hashPassword(friend_pass);
+      passwords.friend_pass_changed_at = now;
+      changed = true;
+    }
+    
+    if (changed) {
+      const saved = savePasswords();
+      if (!saved) {
+        return res.status(500).json({ error: 'Failed to save passwords to disk' });
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      passwords: {
+        gatekeeper_key: passwords.gatekeeper_key,
+        admin_pass: passwords.admin_pass,
+        friend_pass: passwords.friend_pass,
+        admin_pass_changed_at: passwords.admin_pass_changed_at,
+        friend_pass_changed_at: passwords.friend_pass_changed_at,
+        gatekeeper_changed_at: passwords.gatekeeper_changed_at
+      }
+    });
   });
 
-  // Push notification endpoints
   app.get('/api/push/vapid-key', (req, res) => {
     res.json({ publicKey: VAPID_PUBLIC_KEY });
   });
@@ -258,14 +342,12 @@ export async function registerRoutes(
       return res.status(400).json({ error: 'Missing subscription or userType' });
     }
     
-    // Only allow admin to subscribe for push notifications
     if (userType !== 'admin') {
       return res.status(403).json({ error: 'Push notifications only available for admin' });
     }
     
     const existing = pushSubscriptions.get('admin') || [];
     
-    // Avoid duplicate subscriptions
     const isDuplicate = existing.some(s => s.endpoint === subscription.endpoint);
     if (!isDuplicate) {
       existing.push({
@@ -297,7 +379,6 @@ export async function registerRoutes(
     res.json({ success: true });
   });
 
-  // WebSocket signaling server
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
   wss.on("connection", (ws: WebSocket) => {
@@ -327,10 +408,8 @@ export async function registerRoutes(
           const room = rooms.get(roomId)!;
           room.clients.set(ws, { ws, profile: myProfile, userType: myUserType, deviceId: myDeviceId });
           
-          // Get the opposite user type
           const peerUserType = myUserType === 'admin' ? 'friend' : 'admin';
           
-          // Check if any peer (opposite user type) is online
           let peerProfile: { name: string; avatar: string } | undefined;
           let peerOnline = false;
           room.clients.forEach((client, clientWs) => {
@@ -342,7 +421,6 @@ export async function registerRoutes(
             }
           });
           
-          // Count unique user types online (for initiator logic)
           const onlineUserTypes = new Set<string>();
           room.clients.forEach((client) => {
             if (client.userType) onlineUserTypes.add(client.userType);
@@ -357,10 +435,8 @@ export async function registerRoutes(
             peerOnline: peerOnline
           }));
           
-          // Request message sync from other devices of same user type
           room.clients.forEach((client, clientWs) => {
             if (client.userType === myUserType && clientWs !== ws && clientWs.readyState === WebSocket.OPEN) {
-              // Ask existing device to share its messages with new device
               clientWs.send(JSON.stringify({ 
                 type: "sync-request",
                 targetDeviceId: myDeviceId
@@ -368,7 +444,6 @@ export async function registerRoutes(
             }
           });
           
-          // Deliver pending messages
           const roomPendingKey = `${roomId}_${myUserType}`;
           const pending = pendingMessages.get(roomPendingKey);
           if (pending && pending.length > 0) {
@@ -388,7 +463,6 @@ export async function registerRoutes(
             });
             pendingMessages.delete(roomPendingKey);
             
-            // Notify sender that messages were delivered
             const senderType = myUserType === 'admin' ? 'friend' : 'admin';
             broadcastToUserType(room, senderType, {
               type: 'message-status',
@@ -397,7 +471,6 @@ export async function registerRoutes(
             });
           }
           
-          // Check if this is the first device of this user type to join
           let isFirstDeviceOfType = true;
           room.clients.forEach((client, clientWs) => {
             if (client.userType === myUserType && clientWs !== ws) {
@@ -405,7 +478,6 @@ export async function registerRoutes(
             }
           });
           
-          // Only notify opposite user type if this is the first device of this user type
           if (isFirstDeviceOfType) {
             room.clients.forEach((client, clientWs) => {
               if (client.userType !== myUserType && clientWs.readyState === WebSocket.OPEN) {
@@ -422,7 +494,6 @@ export async function registerRoutes(
           const room = rooms.get(currentRoom);
           if (!room) return;
           
-          // Find if peer (opposite user type) is online
           let peerOnline = false;
           const targetUserType = myUserType === 'admin' ? 'friend' : 'admin';
           
@@ -433,7 +504,6 @@ export async function registerRoutes(
             }
           });
           
-          // Also send to other devices of same user type
           room.clients.forEach((client, clientWs) => {
             if (client.userType === myUserType && clientWs !== ws && clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({ ...data, sender: 'me', status: peerOnline ? 'delivered' : 'sent' }));
@@ -441,14 +511,12 @@ export async function registerRoutes(
           });
           
           if (peerOnline) {
-            // Send delivered status back to sender
             ws.send(JSON.stringify({
               type: 'message-status',
               ids: [data.id],
               status: 'delivered'
             }));
           } else {
-            // Queue message
             const roomPendingKey = `${currentRoom}_${targetUserType}`;
             if (!pendingMessages.has(roomPendingKey)) {
               pendingMessages.set(roomPendingKey, []);
@@ -465,7 +533,6 @@ export async function registerRoutes(
               status: 'sent'
             });
             
-            // Send push notification to admin only (when friend sends message and admin is offline)
             if (targetUserType === 'admin') {
               const msgPreview = data.messageType === 'text' 
                 ? (data.text?.length > 50 ? data.text.substring(0, 50) + '...' : data.text)
@@ -484,7 +551,6 @@ export async function registerRoutes(
           }
 
         } else if (type === "message-read" && currentRoom) {
-          // Handle read receipts
           const room = rooms.get(currentRoom);
           if (!room) return;
           
@@ -496,7 +562,6 @@ export async function registerRoutes(
           });
 
         } else if (type === "sync-response" && currentRoom) {
-          // Forward sync response to the target device
           const room = rooms.get(currentRoom);
           if (!room) return;
           
@@ -510,26 +575,21 @@ export async function registerRoutes(
           });
 
         } else if (type === "emergency-wipe" && currentRoom) {
-          // Emergency wipe - clear all messages for everyone
           const room = rooms.get(currentRoom);
           if (!room) return;
           
-          // Clear pending messages
           pendingMessages.delete(`${currentRoom}_admin`);
           pendingMessages.delete(`${currentRoom}_friend`);
           
-          // Broadcast wipe to ALL clients in room
           broadcastToAll(room, { type: 'emergency-wipe' });
 
         } else if (currentRoom && rooms.has(currentRoom)) {
-          // Relay other signaling messages to opposite user type
           const room = rooms.get(currentRoom)!;
           const targetUserType = myUserType === 'admin' ? 'friend' : 'admin';
           
           if (type === "typing" || type === "profile-update") {
             broadcastToUserType(room, targetUserType, data);
           } else {
-            // For calls etc, broadcast to all except sender
             broadcastToAll(room, data, ws);
           }
         }
@@ -543,7 +603,6 @@ export async function registerRoutes(
         const room = rooms.get(currentRoom)!;
         room.clients.delete(ws);
         
-        // Check if there are still other connections of the same user type
         let sameUserTypeStillOnline = false;
         room.clients.forEach((client) => {
           if (client.userType === myUserType) {
@@ -551,17 +610,14 @@ export async function registerRoutes(
           }
         });
         
-        // Only notify peers if this was the last connection of this user type
         if (!sameUserTypeStillOnline) {
           room.clients.forEach((client, clientWs) => {
-            // Only notify the opposite user type that this user went offline
             if (client.userType !== myUserType && clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({ type: "peer-left", roomId: currentRoom }));
             }
           });
         }
         
-        // Cleanup
         if (room.clients.size === 0) {
           setTimeout(() => {
             const r = rooms.get(currentRoom!);
