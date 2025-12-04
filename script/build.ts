@@ -58,7 +58,7 @@ async function buildAll() {
     platform: "node",
     bundle: true,
     format: "cjs",
-    outfile: "dist/index.js",
+    outfile: "dist/index.cjs",
     define: {
       "process.env.NODE_ENV": '"production"',
     },
@@ -75,8 +75,8 @@ async function buildAll() {
   // Verify the output file exists
   const { stat, readdir } = await import("fs/promises");
   try {
-    const stats = await stat("dist/index.js");
-    console.log("dist/index.js created, size:", stats.size, "bytes");
+    const stats = await stat("dist/index.cjs");
+    console.log("dist/index.cjs created, size:", stats.size, "bytes");
 
     // Print directory structure
     console.log("\n=== Build Output Structure ===");
