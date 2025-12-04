@@ -45,6 +45,7 @@ import { ActiveCallOverlay } from "./ActiveCallOverlay";
 import { EmojiPicker } from "./EmojiPicker";
 import { ProfileEditor } from "./ProfileEditor";
 import { MediaViewer } from "./MediaViewer";
+import { MediaPreviewSender } from "./MediaPreviewSender";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import ChatMessage from "./ChatMessage";
@@ -94,6 +95,7 @@ export function ChatLayout({
     url: string;
     type: "image" | "video";
   } | null>(null);
+  const [showMediaSender, setShowMediaSender] = useState(false);
 
   // selection / reply
   const [isSelectMode, setIsSelectMode] = useState(false);
@@ -105,7 +107,6 @@ export function ChatLayout({
   // refs
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // recorder
@@ -262,31 +263,12 @@ export function ChatLayout({
     textareaRef.current?.focus();
   }, []);
 
-  // media upload
-  const handleFileUpload = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-
-      if (file.size > 10 * 1024 * 1024) {
-        toast({ variant: "destructive", title: "File too large (max 10MB)" });
-        return;
-      }
-
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const result = event.target?.result as string;
-        const type = file.type.startsWith("video/") ? "video" : "image";
-        sendMessage({
-          type,
-          mediaUrl: result,
-          text: type === "video" ? "🎥 Video" : "📷 Photo",
-        });
-      };
-      reader.readAsDataURL(file);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+  // media send handler for MediaPreviewSender
+  const handleMediaSend = useCallback(
+    (data: { type: "image" | "video"; mediaUrl: string; text: string }) => {
+      sendMessage(data);
     },
-    [sendMessage, toast]
+    [sendMessage]
   );
 
   // recorder
@@ -688,6 +670,13 @@ export function ChatLayout({
             onClose={() => setSelectedMedia(null)}
           />
 
+          {/* Media Preview Sender */}
+          <MediaPreviewSender
+            isOpen={showMediaSender}
+            onClose={() => setShowMediaSender(false)}
+            onSend={handleMediaSend}
+          />
+
           {/* Retention Settings */}
           <Dialog
             open={showRetentionSettings}
@@ -769,14 +758,7 @@ export function ChatLayout({
             </DialogContent>
           </Dialog>
 
-          {/* Hidden File Input */}
-          <input
-            type="file"
-            ref={fileInputRef}
-            className="hidden"
-            accept="image/*,video/*"
-            onChange={handleFileUpload}
-          />
+          
 
           {/* HEADER */}
           <header
@@ -967,7 +949,7 @@ export function ChatLayout({
                     <>
                       <button
                         type="button"
-                        onClick={() => fileInputRef.current?.click()}
+                        onClick={() => setShowMediaSender(true)}
                         disabled={!isConnected}
                         className="p-1.5 sm:p-2 text-zinc-300 hover:bg-white/10 rounded-full disabled:opacity-40 shrink-0 mb-0.5"
                       >
