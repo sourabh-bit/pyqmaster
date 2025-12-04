@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useRef, useState } from "react";
-import { Check, CheckCheck, Clock } from "lucide-react";
+import { Check, CheckCheck, Clock, Reply } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { AudioPlayer } from "./AudioPlayer";
@@ -27,6 +27,7 @@ interface Props {
   onSelect: (id: string) => void;
   onLongPress: (id: string) => void;
   onReply: (msg: Message) => void;
+  onSwipeReply: (msg: Message) => void;
 }
 
 export default memo(function ChatMessage({
@@ -36,9 +37,22 @@ export default memo(function ChatMessage({
   onSelect,
   onLongPress,
   onReply,
+  onSwipeReply,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [isPressing, setIsPressing] = useState(false);
+  const [startX, setStartX] = useState<number | null>(null);
+  const [startY, setStartY] = useState<number | null>(null);
+  const [isSwiping, setIsSwiping] = useState(false);
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const swipeThreshold = 35;
+
+  const [startXPointer, setStartXPointer] = useState<number | null>(null);
+  const [startYPointer, setStartYPointer] = useState<number | null>(null);
+  const [isSwipingPointer, setIsSwipingPointer] = useState(false);
+  const [swipeOffsetPointer, setSwipeOffsetPointer] = useState(0);
+  const [replyTriggered, setReplyTriggered] = useState(false);
+  const [replyTriggeredPointer, setReplyTriggeredPointer] = useState(false);
 
   const handleClick = useCallback(() => {
     if (isSelectMode) {
@@ -65,18 +79,94 @@ export default memo(function ChatMessage({
 
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     setIsPressing(true);
+    setStartXPointer(e.clientX);
+    setStartYPointer(e.clientY);
+    setIsSwipingPointer(false);
     longPressHandlers.onPointerDown(e);
   }, [longPressHandlers]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     setIsPressing(false);
-    longPressHandlers.onPointerUp(e);
-  }, [longPressHandlers]);
+    if (!replyTriggeredPointer) {
+      setSwipeOffsetPointer(0);
+    }
+    setStartXPointer(null);
+    setStartYPointer(null);
+    setIsSwipingPointer(false);
+    setReplyTriggeredPointer(false);
+    longPressHandlers.onPointerUp();
+  }, [longPressHandlers, replyTriggeredPointer]);
 
   const handlePointerCancel = useCallback((e: React.PointerEvent) => {
     setIsPressing(false);
-    longPressHandlers.onPointerCancel(e);
+    setStartXPointer(null);
+    setStartYPointer(null);
+    setIsSwipingPointer(false);
+    setSwipeOffsetPointer(0);
+    setReplyTriggeredPointer(false);
+    longPressHandlers.onPointerCancel();
   }, [longPressHandlers]);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (startXPointer === null || startYPointer === null) return;
+    const deltaX = e.clientX - startXPointer;
+    const deltaY = Math.abs(e.clientY - startYPointer);
+
+    if (deltaY < 20 && Math.abs(deltaX) > 10 && !isSwipingPointer) {
+      setIsSwipingPointer(true);
+    }
+
+    if (isSwipingPointer) {
+      e.preventDefault();
+      const offset = Math.max(0, Math.min(deltaX, 80));
+      setSwipeOffsetPointer(offset);
+      if (Math.abs(deltaX) > 35 && !replyTriggeredPointer) {
+        setReplyTriggeredPointer(true);
+        onReply(msg);
+      }
+    } else {
+      longPressHandlers.onPointerMove(e);
+    }
+  }, [startXPointer, startYPointer, isSwipingPointer, replyTriggeredPointer, onReply, msg, longPressHandlers]);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    setStartX(e.touches[0].clientX);
+    setStartY(e.touches[0].clientY);
+    setIsSwiping(false);
+  }, []);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (startX === null || startY === null) return;
+    const deltaX = e.touches[0].clientX - startX;
+    const deltaY = Math.abs(e.touches[0].clientY - startY);
+
+    if (deltaY < 20 && Math.abs(deltaX) > 10 && !isSwiping) {
+      setIsSwiping(true);
+    }
+
+    if (isSwiping) {
+      e.preventDefault();
+      const offset = Math.max(0, Math.min(deltaX, 80)); // Max 80px offset
+      setSwipeOffset(offset);
+      if (Math.abs(deltaX) > 35 && !replyTriggered) {
+        setReplyTriggered(true);
+        onReply(msg);
+      }
+    }
+  }, [startX, startY, isSwiping, replyTriggered, onReply, msg]);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (isSwiping && startX !== null) {
+      const deltaX = e.changedTouches[0].clientX - startX;
+      if (swipeOffset > swipeThreshold) {
+        onReply(msg);
+      }
+    }
+    setStartX(null);
+    setStartY(null);
+    setIsSwiping(false);
+    setSwipeOffset(0);
+  }, [isSwiping, startX, swipeOffset, swipeThreshold, onReply, msg]);
 
   const handleMediaClick = useCallback(
     (e: React.MouseEvent) => {
@@ -98,13 +188,20 @@ export default memo(function ChatMessage({
         isSelected && "message-selected",
         isPressing && !isSelectMode && "scale-[0.98] opacity-90"
       )}
-      style={{ touchAction: isSelectMode ? "none" : "pan-y" }}
+      style={{
+        touchAction: isSelectMode ? "none" : "pan-y",
+        transform: (swipeOffset > 0 ? `translateX(${swipeOffset}px)` : undefined) || (swipeOffsetPointer > 0 ? `translateX(${swipeOffsetPointer}px)` : undefined),
+        transition: (isSwiping || isSwipingPointer) ? 'none' : 'transform 0.2s ease-out'
+      }}
       onPointerDown={handlePointerDown}
-      onPointerMove={longPressHandlers.onPointerMove}
+      onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}
       onPointerLeave={handlePointerCancel}
       onContextMenu={longPressHandlers.onContextMenu}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
     >
       {isSelectMode && (
         <div

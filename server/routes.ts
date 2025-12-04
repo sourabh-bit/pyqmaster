@@ -56,7 +56,7 @@ async function initializeDatabase() {
       adminUser = await db.insert(schema.users).values({
         username: 'admin',
         password: await hashPassword('admin123'),
-      }).returning().then(rows => rows[0]);
+      }).returning().then((rows: any[]) => rows[0]);
     }
 
     // Create friend user if not exists
@@ -68,7 +68,7 @@ async function initializeDatabase() {
       friendUser = await db.insert(schema.users).values({
         username: 'friend',
         password: await hashPassword('friend123'),
-      }).returning().then(rows => rows[0]);
+      }).returning().then((rows: any[]) => rows[0]);
     }
 
     adminUserId = adminUser.id;
@@ -758,7 +758,7 @@ export async function registerRoutes(
 
           try {
             // Mark messages as read in database if available
-            if (hasDatabase) {
+            if (hasDatabase && db) {
               const userId = myUserType === 'admin' ? adminUserId : friendUserId;
               for (const messageId of data.ids) {
                 await db.insert(schema.messageReads).values({
@@ -845,14 +845,16 @@ export async function registerRoutes(
 
           try {
             // Mark message as deleted in database
-            const userId = myUserType === 'admin' ? adminUserId : friendUserId;
-            await db.update(schema.messages)
-              .set({
-                isDeleted: true,
-                deletedAt: new Date(),
-                deletedById: userId,
-              })
-              .where(eq(schema.messages.id, data.id));
+            if (hasDatabase && db) {
+              const userId = myUserType === 'admin' ? adminUserId : friendUserId;
+              await db.update(schema.messages)
+                .set({
+                  isDeleted: true,
+                  deletedAt: new Date(),
+                  deletedById: userId,
+                })
+                .where(eq(schema.messages.id, data.id));
+            }
 
             // Broadcast delete to all sessions
             room.clients.forEach((client, clientWs) => {
@@ -873,14 +875,16 @@ export async function registerRoutes(
 
           try {
             // Mark all messages as deleted in database
-            const userId = myUserType === 'admin' ? adminUserId : friendUserId;
-            await db.update(schema.messages)
-              .set({
-                isDeleted: true,
-                deletedAt: new Date(),
-                deletedById: userId,
-              })
-              .where(eq(schema.messages.roomId, currentRoom));
+            if (hasDatabase && db) {
+              const userId = myUserType === 'admin' ? adminUserId : friendUserId;
+              await db.update(schema.messages)
+                .set({
+                  isDeleted: true,
+                  deletedAt: new Date(),
+                  deletedById: userId,
+                })
+                .where(eq(schema.messages.roomId, currentRoom));
+            }
 
             broadcastToAll(room, { type: 'emergency-wipe' });
           } catch (error) {

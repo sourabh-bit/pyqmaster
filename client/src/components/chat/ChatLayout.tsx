@@ -23,6 +23,8 @@ import {
   Reply,
   Shield,
   MoreVertical,
+  Camera,
+  Image,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
@@ -46,8 +48,8 @@ import { ActiveCallOverlay } from "./ActiveCallOverlay";
 import { EmojiPicker } from "./EmojiPicker";
 import { ProfileEditor } from "./ProfileEditor";
 import { MediaViewer } from "./MediaViewer";
-import { MediaPreviewSender } from "./MediaPreviewSender";
-import { ThemeToggle } from "@/components/ui/theme-toggle";
+
+
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import ChatMessage from "./ChatMessage";
 
@@ -96,7 +98,7 @@ export function ChatLayout({
     url: string;
     type: "image" | "video";
   } | null>(null);
-  const [showMediaSender, setShowMediaSender] = useState(false);
+  const [showMediaOptions, setShowMediaOptions] = useState(false);
 
   // selection / reply
   const [isSelectMode, setIsSelectMode] = useState(false);
@@ -305,6 +307,44 @@ export function ChatLayout({
     [sendMessage]
   );
 
+  const handleCamera = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.capture = 'environment';
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        const url = URL.createObjectURL(file);
+        sendMessage({ type: 'image', mediaUrl: url, text: '' });
+      }
+    };
+    input.click();
+    setShowMediaOptions(false);
+  }, [sendMessage]);
+
+  const handleGallery = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*,video/*';
+    input.multiple = true;
+    input.onchange = (e) => {
+      const files = (e.target as HTMLInputElement).files;
+      if (files) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const url = URL.createObjectURL(file);
+          const type = file.type.startsWith('image/') ? 'image' : 'video';
+          sendMessage({ type, mediaUrl: url, text: '' });
+        }
+      }
+    };
+    input.click();
+    setShowMediaOptions(false);
+  }, [sendMessage]);
+
+
+
   // recorder
   const handleStartRecording = useCallback(async () => {
     try {
@@ -402,6 +442,7 @@ export function ChatLayout({
           onSelect={handleSelectMessage}
           onLongPress={handleMessageLongPress}
           onReply={handleReplyAction}
+          onSwipeReply={handleReply}
         />
       )),
     [
@@ -411,6 +452,7 @@ export function ChatLayout({
       handleSelectMessage,
       handleMessageLongPress,
       handleReplyAction,
+      handleReply,
     ]
   );
 
@@ -509,10 +551,7 @@ export function ChatLayout({
                   <span className="text-sm">Admin Panel</span>
                 </button>
               )}
-              <div className="flex items-center gap-3 p-3 rounded-lg hover:bg-white/10 transition-colors">
-                <span className="text-sm text-zinc-400">Theme</span>
-                <ThemeToggle />
-              </div>
+
             </div>
 
             <div className="flex-1 overflow-y-auto">
@@ -599,7 +638,7 @@ export function ChatLayout({
               >
                 <Settings size={18} />
               </button>
-              <ThemeToggle />
+
             </div>
           </div>
 
@@ -640,7 +679,7 @@ export function ChatLayout({
         </div>
 
         {/* MAIN CHAT AREA */}
-        <div className="flex-1 flex flex-col bg-[#0B141A] h-dvh md:h-auto overflow-hidden chat-container">
+        <div className="flex-1 flex flex-col bg-[#0B141A] h-dvh md:h-auto overflow-hidden chat-container md:overflow-visible">
           {/* Incoming Call Dialog */}
           <Dialog
             open={!!incomingCall}
@@ -718,12 +757,7 @@ export function ChatLayout({
             onClose={() => setSelectedMedia(null)}
           />
 
-          {/* Media Preview Sender */}
-          <MediaPreviewSender
-            isOpen={showMediaSender}
-            onClose={() => setShowMediaSender(false)}
-            onSend={handleMediaSend}
-          />
+
 
           {/* Retention Settings */}
           <Dialog
@@ -811,7 +845,7 @@ export function ChatLayout({
           {/* HEADER */}
           <header
             className={cn(
-              "h-14 sm:h-16 flex items-center justify-between px-2 sm:px-4 border-b border-black/40 z-50 shrink-0 safe-area-top selection-header",
+              "h-14 sm:h-16 flex items-center justify-between px-2 sm:px-4 border-b border-black/40 z-50 shrink-0 safe-area-top selection-header md:relative fixed top-0 left-0 right-0 md:top-auto md:left-auto md:right-auto",
               isSelectMode ? "bg-emerald-900/90" : "bg-[#202c33]"
             )}
             onClick={!isSelectMode ? handleHeaderDoubleTap : undefined}
@@ -925,8 +959,8 @@ export function ChatLayout({
           {/* MESSAGES */}
           <div
             ref={scrollRef}
-            className="flex-1 min-h-0 overflow-y-auto px-2 sm:px-4 pt-3 pb-3 bg-[#0B141A] overscroll-contain"
-            style={{ 
+            className="flex-1 min-h-0 overflow-y-auto px-2 sm:px-4 pt-16 sm:pt-18 pb-16 sm:pb-20 bg-[#0B141A] overscroll-contain"
+            style={{
               WebkitOverflowScrolling: "touch",
               touchAction: isSelectMode ? "none" : "pan-y",
             }}
@@ -967,7 +1001,7 @@ export function ChatLayout({
           </div>
 
           {/* INPUT */}
-          <div className="bg-[#202c33] border-t border-black/40 shrink-0 safe-area-bottom">
+          <div className="bg-[#202c33] border-t border-black/40 shrink-0 safe-area-bottom md:relative fixed bottom-0 left-0 right-0 md:bottom-auto md:left-auto md:right-auto z-40 md:z-auto">
             {replyingTo && (
               <div className="px-3 pt-2">
                 <div className="flex items-center gap-2 px-3 py-2 bg-[#18252f] rounded-xl border-l-2 border-emerald-500">
@@ -999,14 +1033,34 @@ export function ChatLayout({
                 <div className="flex items-end gap-1.5 sm:gap-2 rounded-3xl bg-[#2a3942] px-2 sm:px-3 py-1.5">
                   {!isRecording && (
                     <>
-                      <button
-                        type="button"
-                        onClick={() => setShowMediaSender(true)}
-                        disabled={!isConnected}
-                        className="p-1.5 sm:p-2 text-zinc-300 hover:bg-white/10 rounded-full disabled:opacity-40 shrink-0 mb-0.5"
-                      >
-                        <Paperclip size={18} />
-                      </button>
+                      <Popover open={showMediaOptions} onOpenChange={setShowMediaOptions}>
+                        <PopoverTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => setShowMediaOptions(true)}
+                            disabled={!isConnected}
+                            className="p-1.5 sm:p-2 text-zinc-300 hover:bg-white/10 rounded-full disabled:opacity-40 shrink-0 mb-0.5"
+                          >
+                            <Paperclip size={18} />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-48 p-2" align="start" side="top">
+                          <div className="space-y-1">
+                            <button
+                              onClick={handleCamera}
+                              className="w-full flex items-center gap-2 p-2 rounded hover:bg-white/10 text-left"
+                            >
+                              <Camera size={16} /> Camera
+                            </button>
+                            <button
+                              onClick={handleGallery}
+                              className="w-full flex items-center gap-2 p-2 rounded hover:bg-white/10 text-left"
+                            >
+                              <Image size={16} /> Gallery
+                            </button>
+                          </div>
+                        </PopoverContent>
+                      </Popover>
 
                       <Popover>
                         <PopoverTrigger asChild>
