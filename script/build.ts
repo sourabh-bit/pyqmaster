@@ -45,10 +45,6 @@ async function buildAll() {
   console.log("building client...");
   await viteBuild();
 
-  // Ensure server directory exists
-  const { mkdir } = await import("fs/promises");
-  await mkdir("dist/server", { recursive: true });
-
   console.log("building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));
   const allDeps = [
@@ -75,12 +71,32 @@ async function buildAll() {
   });
 
   console.log("Server build result:", result);
-  
+
   // Verify the output file exists
-  const { stat } = await import("fs/promises");
+  const { stat, readdir } = await import("fs/promises");
   try {
     const stats = await stat("dist/index.js");
     console.log("dist/index.js created, size:", stats.size, "bytes");
+
+    // Print directory structure
+    console.log("\n=== Build Output Structure ===");
+    const distContents = await readdir("dist", { withFileTypes: true });
+    for (const item of distContents) {
+      if (item.isDirectory()) {
+        console.log(`dist/${item.name}/`);
+        try {
+          const subContents = await readdir(`dist/${item.name}`);
+          for (const subItem of subContents) {
+            console.log(`  dist/${item.name}/${subItem}`);
+          }
+        } catch (e) {
+          // ignore
+        }
+      } else {
+        console.log(`dist/${item.name}`);
+      }
+    }
+    console.log("=== End Build Output Structure ===\n");
   } catch (e) {
     console.error("ERROR: dist/index.js was not created!");
     process.exit(1);
