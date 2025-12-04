@@ -111,7 +111,6 @@ const MessageItem = memo(
       if (!isSwiping || isSelectMode) return;
       const diff = e.touches[0].clientX - startX;
       if (Math.abs(diff) > 10) {
-        // Cancel long-press if moved more than 10px
         onRelease();
         setHasLongPressed(false);
       }
@@ -142,7 +141,6 @@ const MessageItem = memo(
       if (!isSwiping || isSelectMode) return;
       const diff = e.clientX - startX;
       if (Math.abs(diff) > 10) {
-        // Cancel long-press if moved more than 10px
         onRelease();
       }
       const maxSwipe = msg.sender === "me" ? -60 : 60;
@@ -386,8 +384,6 @@ export function ChatLayout({ onLock, currentUser, showAdminPanel, onAdminPanelTo
     sendMessage,
     deleteMessage,
     deleteMessages = (msgIds: string[]) => {
-      // Fallback implementation: remove from local state only
-      setMessages(prev => prev.filter(m => !msgIds.includes(m.id)));
       toast({ title: "Messages deleted locally" });
     },
     clearMessages,
@@ -418,7 +414,6 @@ export function ChatLayout({ onLock, currentUser, showAdminPanel, onAdminPanelTo
     return () => channel.close();
   }, [emergencyWipe]);
 
-  // Load current retention settings
   useEffect(() => {
     const loadRetentionSettings = async () => {
       try {
@@ -450,20 +445,17 @@ export function ChatLayout({ onLock, currentUser, showAdminPanel, onAdminPanelTo
     }
   }, [selectedMessages.size, isSelectMode]);
 
-  // WhatsApp-like auto-resize with smooth transitions
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const el = e.target;
       setInputText(el.value);
       handleTyping();
 
-      // Reset height to auto to get accurate scrollHeight
       el.style.height = "auto";
       const scrollHeight = el.scrollHeight;
       const newHeight = Math.min(Math.max(scrollHeight, 24), 200);
       el.style.height = `${newHeight}px`;
 
-      // Enable scrolling only when at max height
       el.style.overflowY = scrollHeight > 200 ? "auto" : "hidden";
     },
     [handleTyping]
@@ -667,618 +659,618 @@ export function ChatLayout({ onLock, currentUser, showAdminPanel, onAdminPanelTo
 
   return (
     <div className="w-full h-full flex justify-center bg-background overflow-hidden">
-      <div className="w-full max-w-[1400px] h-full flex">
-        <div className="flex w-full h-full flex-col md:flex-row overflow-hidden">
-        {/* Incoming Call Dialog */}
-        <Dialog
-          open={!!incomingCall}
-          onOpenChange={(open) => !open && rejectCall()}
-        >
-          <DialogContent className="w-[90vw] max-w-md border-none bg-slate-900 text-white shadow-2xl mx-auto">
-            <DialogHeader className="flex flex-col items-center gap-4">
-              <Avatar className="w-20 h-20 sm:w-24 sm:h-24 border-4 border-white/10 animate-pulse">
-                <AvatarImage src={peerProfile.avatar} />
-                <AvatarFallback className="text-2xl">
-                  {peerProfile.name.charAt(0)}
-                </AvatarFallback>
-              </Avatar>
-              <DialogTitle className="text-xl sm:text-2xl font-light">
-                {incomingCall?.type === "video" ? "Video" : "Voice"} Call
-              </DialogTitle>
-              <DialogDescription className="text-white/60">
-                {peerProfile.name} is calling...
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex items-center justify-center gap-6 sm:gap-8 mt-4 sm:mt-6">
-              <button
-                onClick={rejectCall}
-                className="p-3 sm:p-4 bg-red-500 rounded-full hover:bg-red-600 transition-colors"
-              >
-                <PhoneOff size={20} className="sm:w-6 sm:h-6" />
-              </button>
-              <button
-                onClick={acceptCall}
-                className="p-3 sm:p-4 bg-green-500 rounded-full hover:bg-green-600 animate-bounce"
-              >
-                <Phone size={20} className="sm:w-6 sm:h-6" />
-              </button>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        {/* Delete Message Dialog */}
-        <Dialog
-          open={!!messageToDelete}
-          onOpenChange={(open) => !open && setMessageToDelete(null)}
-        >
-          <DialogContent className="w-[85vw] max-w-sm bg-card border-border">
-            <DialogHeader>
-              <DialogTitle className="text-base">Delete Message?</DialogTitle>
-              <DialogDescription className="text-muted-foreground text-sm">
-                This message will be deleted for you.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="flex gap-2 mt-4">
-              <button
-                onClick={() => setMessageToDelete(null)}
-                className="flex-1 py-2.5 bg-secondary hover:bg-secondary/80 rounded-lg text-sm transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteMessage}
-                className="flex-1 py-2.5 bg-destructive hover:bg-destructive/90 text-destructive-foreground rounded-lg text-sm font-medium transition-colors"
-              >
-                Delete
-              </button>
-            </div>
-          </DialogContent>
-        </Dialog>
-
-        {/* Active Call Overlay */}
-        {activeCall && (
-          <ActiveCallOverlay
-            localStream={localStream}
-            remoteStream={remoteStream}
-            isMuted={isMuted}
-            isVideoOff={isVideoOff}
-            onToggleMute={toggleMute}
-            onToggleVideo={toggleVideo}
-            onEndCall={endCall}
-            callStatus={callStatus}
-            peerName={peerProfile.name}
-            peerAvatar={peerProfile.avatar}
-          />
-        )}
-
-        {/* Media Viewer */}
-        <MediaViewer
-          isOpen={!!selectedMedia}
-          onClose={() => setSelectedMedia(null)}
-          mediaUrl={selectedMedia?.url || ""}
-          mediaType={selectedMedia?.type || "image"}
-        />
-
-        {/* Profile Editor */}
-        <ProfileEditor
-          isOpen={showProfileEditor}
-          onClose={() => setShowProfileEditor(false)}
-          currentName={myProfile.name}
-          currentAvatar={myProfile.avatar}
-          onSave={(name, avatar) => updateMyProfile({ name, avatar })}
-        />
-
-        {/* Settings Panel */}
-        <SettingsPanel
-          isOpen={showSettings}
-          onClose={() => setShowSettings(false)}
-          userType={currentUser}
-        />
-
-        {/* Retention Settings Modal */}
-        <Dialog open={showRetentionSettings} onOpenChange={setShowRetentionSettings}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Message Retention</DialogTitle>
-              <DialogDescription>
-                Choose how long messages should be kept before disappearing.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Retention Mode</label>
-                <select
-                  value={retentionMode}
-                  onChange={(e) => setRetentionMode(e.target.value as any)}
-                  className="w-full px-3 py-2 border border-input bg-background rounded-md"
+      <div className="w-full max-w-[1400px] h-full flex overflow-hidden">
+        <div className="flex w-full h-full flex-col md:flex-row overflow-hidden bg-background dark:bg-zinc-900 rounded-none md:rounded-2xl shadow-xl">
+          {/* Incoming Call Dialog */}
+          <Dialog
+            open={!!incomingCall}
+            onOpenChange={(open) => !open && rejectCall()}
+          >
+            <DialogContent className="w-[90vw] max-w-md border-none bg-slate-900 text-white shadow-2xl mx-auto">
+              <DialogHeader className="flex flex-col items-center gap-4">
+                <Avatar className="w-20 h-20 sm:w-24 sm:h-24 border-4 border-white/10 animate-pulse">
+                  <AvatarImage src={peerProfile.avatar} />
+                  <AvatarFallback className="text-2xl">
+                    {peerProfile.name.charAt(0)}
+                  </AvatarFallback>
+                </Avatar>
+                <DialogTitle className="text-xl sm:text-2xl font-light">
+                  {incomingCall?.type === "video" ? "Video" : "Voice"} Call
+                </DialogTitle>
+                <DialogDescription className="text-white/60">
+                  {peerProfile.name} is calling...
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex items-center justify-center gap-6 sm:gap-8 mt-4 sm:mt-6">
+                <button
+                  onClick={rejectCall}
+                  className="p-3 sm:p-4 bg-red-500 rounded-full hover:bg-red-600 transition-colors"
                 >
-                  <option value="forever">Off (Keep messages forever)</option>
-                  <option value="after_seen">After Seen</option>
-                  <option value="1h">1 Hour</option>
-                  <option value="24h">24 Hours</option>
-                </select>
+                  <PhoneOff size={20} className="sm:w-6 sm:h-6" />
+                </button>
+                <button
+                  onClick={acceptCall}
+                  className="p-3 sm:p-4 bg-green-500 rounded-full hover:bg-green-600 transition-colors"
+                >
+                  <Phone size={20} className="sm:w-6 sm:h-6" />
+                </button>
               </div>
-              <div className="text-sm text-muted-foreground">
-                {retentionMode === 'forever' && 'Messages will never disappear.'}
-                {retentionMode === 'after_seen' && 'Messages disappear after both users have seen them.'}
-                {retentionMode === '1h' && 'Messages disappear 1 hour after being sent.'}
-                {retentionMode === '24h' && 'Messages disappear 24 hours after being sent.'}
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowRetentionSettings(false)}
-                className="px-4 py-2 text-sm border border-input rounded-md hover:bg-secondary"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  try {
-                    const response = await fetch(`/api/retention/${FIXED_ROOM_ID}`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ retentionMode }),
-                    });
-                    if (response.ok) {
-                      setShowRetentionSettings(false);
-                      toast({ title: "Retention setting updated" });
-                    } else {
-                      throw new Error('Failed to update retention setting');
-                    }
-                  } catch (error) {
-                    console.error('Error updating retention setting:', error);
-                    toast({ variant: "destructive", title: "Failed to update retention setting" });
-                  }
-                }}
-                className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-              >
-                Save
-              </button>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
 
-        {/* Hidden File Input */}
-        <input
-          type="file"
-          ref={fileInputRef}
-          className="hidden"
-          accept="image/*,video/*"
-          onChange={handleFileUpload}
-        />
-
-        {/* Mobile Sidebar Overlay */}
-        {showSidebar && (
-          <div
-            className="fixed inset-0 bg-black/50 z-40 md:hidden backdrop-blur-sm"
-            onClick={() => setShowSidebar(false)}
-          />
-        )}
-
-        {/* Sidebar */}
-        <div
-          className={cn(
-            "w-full md:w-[350px] h-full border-r border-border flex flex-col bg-background z-50 transition-transform duration-300 ease-out",
-            "fixed md:relative inset-y-0 left-0",
-            showSidebar ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+          {/* Active Call Overlay */}
+          {activeCall && (
+            <ActiveCallOverlay
+              peerName={peerProfile.name}
+              peerAvatar={peerProfile.avatar}
+              callStatus={callStatus}
+              localStream={localStream}
+              remoteStream={remoteStream}
+              isMuted={isMuted}
+              isVideoOff={isVideoOff}
+              onToggleMute={toggleMute}
+              onToggleVideo={toggleVideo}
+              onEndCall={endCall}
+            />
           )}
-        >
-          <div className="p-3 sm:p-4 border-b border-border flex justify-between items-center">
-            <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
-              <div
-                className="flex items-center gap-2 sm:gap-3 cursor-pointer hover:opacity-80 flex-1 min-w-0 transition-opacity"
-                onClick={() => {
-                  setShowProfileEditor(true);
-                  setShowSidebar(false);
-                }}
-              >
-                <div className="relative shrink-0">
-                  <Avatar className="h-9 w-9 sm:h-10 sm:w-10 border border-border">
-                    <AvatarImage src={myProfile.avatar} />
-                    <AvatarFallback
-                      className={cn(
-                        "text-white text-sm",
-                        currentUser === "admin" ? "bg-red-500" : "bg-blue-500"
-                      )}
-                    >
-                      {myProfile.name.charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
+
+          {/* Profile Editor Dialog */}
+          <ProfileEditor
+            isOpen={showProfileEditor}
+            onClose={() => setShowProfileEditor(false)}
+            currentName={myProfile.name}
+            currentAvatar={myProfile.avatar}
+            onSave={(name, avatar) => updateMyProfile({ name, avatar })}
+          />
+
+          {/* Settings Panel */}
+          <SettingsPanel
+            isOpen={showSettings}
+            onClose={() => setShowSettings(false)}
+            userType={currentUser}
+          />
+
+          {/* Media Viewer */}
+          <MediaViewer
+            isOpen={!!selectedMedia}
+            mediaUrl={selectedMedia?.url || ''}
+            mediaType={selectedMedia?.type || 'image'}
+            onClose={() => setSelectedMedia(null)}
+          />
+
+          {/* Delete Confirmation */}
+          <Dialog
+            open={!!messageToDelete}
+            onOpenChange={(open) => !open && setMessageToDelete(null)}
+          >
+            <DialogContent className="w-[90vw] max-w-sm mx-auto">
+              <DialogHeader>
+                <DialogTitle>Delete Message?</DialogTitle>
+                <DialogDescription>
+                  This message will be permanently deleted.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex justify-end gap-2 mt-4">
+                <button
+                  onClick={() => setMessageToDelete(null)}
+                  className="px-4 py-2 text-sm border border-input rounded-md hover:bg-secondary"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteMessage}
+                  className="px-4 py-2 text-sm bg-destructive text-destructive-foreground rounded-md hover:bg-destructive/90"
+                >
+                  Delete
+                </button>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Retention Settings Dialog */}
+          <Dialog open={showRetentionSettings} onOpenChange={setShowRetentionSettings}>
+            <DialogContent className="w-[90vw] max-w-md mx-auto">
+              <DialogHeader>
+                <DialogTitle>Message Retention</DialogTitle>
+                <DialogDescription>
+                  Choose how long messages should be kept
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Retention Mode</label>
+                  <select
+                    value={retentionMode}
+                    onChange={(e) => setRetentionMode(e.target.value as any)}
+                    className="w-full px-3 py-2 border border-input bg-background rounded-md"
+                  >
+                    <option value="forever">Off (Keep messages forever)</option>
+                    <option value="after_seen">After Seen</option>
+                    <option value="1h">1 Hour</option>
+                    <option value="24h">24 Hours</option>
+                  </select>
                 </div>
-                <div className="min-w-0">
-                  <span className="font-semibold text-sm truncate block">
-                    {myProfile.name}
-                  </span>
-                  <p className="text-xs text-muted-foreground flex items-center gap-1">
-                    <span
+                <div className="text-sm text-muted-foreground">
+                  {retentionMode === 'forever' && 'Messages will never disappear.'}
+                  {retentionMode === 'after_seen' && 'Messages disappear after both users have seen them.'}
+                  {retentionMode === '1h' && 'Messages disappear 1 hour after being sent.'}
+                  {retentionMode === '24h' && 'Messages disappear 24 hours after being sent.'}
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setShowRetentionSettings(false)}
+                  className="px-4 py-2 text-sm border border-input rounded-md hover:bg-secondary"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    try {
+                      const response = await fetch(`/api/retention/${FIXED_ROOM_ID}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ retentionMode }),
+                      });
+                      if (response.ok) {
+                        setShowRetentionSettings(false);
+                        toast({ title: "Retention setting updated" });
+                      } else {
+                        throw new Error('Failed to update retention setting');
+                      }
+                    } catch (error) {
+                      console.error('Error updating retention setting:', error);
+                      toast({ variant: "destructive", title: "Failed to update retention setting" });
+                    }
+                  }}
+                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+                >
+                  Save
+                </button>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Hidden File Input */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            className="hidden"
+            accept="image/*,video/*"
+            onChange={handleFileUpload}
+          />
+
+          {/* Mobile Sidebar Overlay */}
+          {showSidebar && (
+            <div
+              className="fixed inset-0 bg-black/50 z-40 md:hidden backdrop-blur-sm"
+              onClick={() => setShowSidebar(false)}
+            />
+          )}
+
+          {/* Sidebar */}
+          <div
+            className={cn(
+              "w-full md:w-[350px] h-full border-r border-border flex flex-col bg-background z-50 transition-transform duration-300 ease-out overflow-hidden",
+              "fixed md:relative inset-y-0 left-0",
+              showSidebar ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+            )}
+          >
+            <div className="p-3 sm:p-4 border-b border-border flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+                <div
+                  className="flex items-center gap-2 sm:gap-3 cursor-pointer hover:opacity-80 flex-1 min-w-0 transition-opacity"
+                  onClick={() => {
+                    setShowProfileEditor(true);
+                    setShowSidebar(false);
+                  }}
+                >
+                  <div className="relative shrink-0">
+                    <Avatar className="h-9 w-9 sm:h-10 sm:w-10 border border-border">
+                      <AvatarImage src={myProfile.avatar} />
+                      <AvatarFallback
+                        className={cn(
+                          "text-white text-sm",
+                          currentUser === "admin" ? "bg-red-500" : "bg-blue-500"
+                        )}
+                      >
+                        {myProfile.name.charAt(0).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="font-semibold text-sm truncate block">
+                      {myProfile.name}
+                    </span>
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <span
+                        className={cn(
+                          "w-1.5 h-1.5 rounded-full shrink-0 transition-colors",
+                          isConnected ? "bg-green-500" : "bg-yellow-500"
+                        )}
+                      />
+                      <span className="truncate">
+                        {isConnected ? "Connected" : "Connecting..."}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                {currentUser === 'admin' && (
+                  <button
+                    onClick={() => {
+                      onAdminPanelToggle();
+                      setShowSidebar(false);
+                    }}
+                    className="p-2 hover:bg-secondary rounded-lg transition-all duration-200 ease-out hover:scale-105 active:scale-95"
+                    title="Admin Panel"
+                  >
+                    <Shield size={18} />
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setShowSettings(true);
+                    setShowSidebar(false);
+                  }}
+                  className="p-2 hover:bg-secondary rounded-lg transition-all duration-200 ease-out hover:scale-105 active:scale-95"
+                  title="Settings"
+                >
+                  <Settings size={18} />
+                </button>
+                <ThemeToggle />
+                <button
+                  onClick={() => setShowSidebar(false)}
+                  className="p-2 md:hidden hover:bg-secondary rounded-lg transition-all duration-200 ease-out hover:scale-105 active:scale-95"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto min-h-0">
+              <div className="flex items-center gap-3 p-3 bg-secondary/50 border-l-4 border-primary">
+                <Avatar className="h-11 w-11 sm:h-12 sm:w-12 shrink-0">
+                  <AvatarImage src={peerProfile.avatar} />
+                  <AvatarFallback>
+                    {peerProfile.name.charAt(0).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-center gap-2">
+                    <h3 className="font-medium text-sm truncate">
+                      {peerProfile.name}
+                    </h3>
+                    <div
                       className={cn(
-                        "w-1.5 h-1.5 rounded-full shrink-0 transition-colors",
-                        isConnected ? "bg-green-500" : "bg-yellow-500"
+                        "w-2 h-2 rounded-full shrink-0 transition-colors",
+                        peerConnected ? "bg-green-500" : "bg-gray-400"
                       )}
                     />
-                    <span className="truncate">
-                      {isConnected ? "Connected" : "Connecting..."}
-                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {peerProfile.isTyping ? (
+                      <span className="text-green-500">typing...</span>
+                    ) : (
+                      getLastSeenText
+                    )}
                   </p>
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-1">
-              {currentUser === 'admin' && (
-                <button
-                  onClick={() => {
-                    onAdminPanelToggle();
-                    setShowSidebar(false);
-                  }}
-                  className="p-2 hover:bg-secondary rounded-lg transition-all duration-200 ease-out hover:scale-105 active:scale-95"
-                  title="Admin Panel"
-                >
-                  <Shield size={18} />
-                </button>
+
+            <div className="p-3 border-t border-border bg-background/50 shrink-0">
+              <p className="text-[10px] text-muted-foreground/50 text-center">
+                Double tap header to lock • Long press to select
+              </p>
+            </div>
+          </div>
+
+          {/* Main Chat Area */}
+          <div className="flex-1 h-full flex flex-col overflow-hidden bg-secondary/30 dark:bg-background min-w-0">
+            {/* Header */}
+            <header
+              className={cn(
+                "h-14 sm:h-16 bg-background/95 backdrop-blur-sm border-b border-border flex items-center justify-between px-2 sm:px-4 shadow-sm z-10 shrink-0 transition-colors",
+                isSelectMode && "bg-primary/10"
               )}
-              <button
-                onClick={() => {
-                  setShowSettings(true);
-                  setShowSidebar(false);
-                }}
-                className="p-2 hover:bg-secondary rounded-lg transition-all duration-200 ease-out hover:scale-105 active:scale-95"
-                title="Settings"
-              >
-                <Settings size={18} />
-              </button>
-              <ThemeToggle />
-              <button
-                onClick={() => setShowSidebar(false)}
-                className="p-2 md:hidden hover:bg-secondary rounded-lg transition-all duration-200 ease-out hover:scale-105 active:scale-95"
-              >
-                <X size={20} />
-              </button>
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto">
-            <div className="flex items-center gap-3 p-3 bg-secondary/50 border-l-4 border-primary">
-              <Avatar className="h-11 w-11 sm:h-12 sm:w-12 shrink-0">
-                <AvatarImage src={peerProfile.avatar} />
-                <AvatarFallback>
-                  {peerProfile.name.charAt(0).toUpperCase()}
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex-1 min-w-0">
-                <div className="flex justify-between items-center gap-2">
-                  <h3 className="font-medium text-sm truncate">
-                    {peerProfile.name}
-                  </h3>
-                  <div
-                    className={cn(
-                      "w-2 h-2 rounded-full shrink-0 transition-colors",
-                      peerConnected ? "bg-green-500" : "bg-gray-400"
-                    )}
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground truncate">
-                  {peerProfile.isTyping ? (
-                    <span className="text-green-500">typing...</span>
-                  ) : (
-                    getLastSeenText
-                  )}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="p-3 border-t border-border bg-background/50">
-            <p className="text-[10px] text-muted-foreground/50 text-center">
-              Double tap header to lock • Long press to select
-            </p>
-          </div>
-        </div>
-
-        {/* Main Chat Area */}
-        <div className="flex-1 flex flex-col h-full min-h-0 bg-secondary/30 dark:bg-background">
-          {/* Header */}
-          <header
-            className={cn(
-              "h-14 sm:h-16 bg-background/95 backdrop-blur-sm border-b border-border flex items-center justify-between px-2 sm:px-4 shadow-sm z-10 flex-shrink-0 transition-colors",
-              isSelectMode && "bg-primary/10"
-            )}
-            onClick={!isSelectMode ? handleHeaderDoubleTap : undefined}
-          >
-            {isSelectMode ? (
-              <>
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={handleCancelSelect}
-                    className="p-2 hover:bg-secondary rounded-lg transition-colors"
-                  >
-                    <X size={20} />
-                  </button>
-                  <span className="font-medium text-sm">
-                    {selectedMessages.size} selected
-                  </span>
-                </div>
-                <button
-                  onClick={handleDeleteSelected}
-                  className="flex items-center gap-2 px-4 py-2 bg-destructive text-destructive-foreground rounded-lg hover:bg-destructive/90 transition-colors"
-                >
-                  <Trash2 size={16} />
-                  <span className="text-sm font-medium">Delete</span>
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowSidebar(true);
-                    }}
-                    className="p-2 md:hidden hover:bg-secondary rounded-lg shrink-0 transition-all duration-200 ease-out hover:scale-105 active:scale-95"
-                  >
-                    <Menu size={20} />
-                  </button>
-                  <Avatar className="h-9 w-9 sm:h-10 sm:w-10 shrink-0">
-                    <AvatarImage src={peerProfile.avatar} />
-                    <AvatarFallback>
-                      {peerProfile.name.charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="min-w-0">
-                    <h2 className="font-semibold text-sm truncate">
-                      {peerProfile.name}
-                    </h2>
-                    <span
-                      className={cn(
-                        "text-xs truncate block transition-colors",
-                        peerConnected
-                          ? "text-green-600 dark:text-green-400"
-                          : "text-muted-foreground"
-                      )}
+              onClick={!isSelectMode ? handleHeaderDoubleTap : undefined}
+            >
+              {isSelectMode ? (
+                <>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={handleCancelSelect}
+                      className="p-2 hover:bg-secondary rounded-lg transition-colors"
                     >
-                      {peerProfile.isTyping ? (
-                        <span className="text-green-500">typing...</span>
-                      ) : (
-                        getLastSeenText
-                      )}
+                      <X size={20} />
+                    </button>
+                    <span className="font-medium text-sm">
+                      {selectedMessages.size} selected
                     </span>
                   </div>
-                </div>
-
-                <div className="flex items-center gap-1.5 shrink-0">
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      peerConnected && startCall("voice");
-                    }}
-                    disabled={!peerConnected}
-                    className={cn(
-                      "p-2.5 rounded-full transition-colors",
-                      peerConnected ? "hover:bg-secondary" : "opacity-40"
-                    )}
+                    onClick={handleDeleteSelected}
+                    className="flex items-center gap-2 px-4 py-2 bg-destructive text-destructive-foreground rounded-lg hover:bg-destructive/90 transition-colors"
                   >
-                    <Phone size={22} className="sm:w-6 sm:h-6" />
+                    <Trash2 size={16} />
+                    <span className="text-sm font-medium">Delete</span>
                   </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      peerConnected && startCall("video");
-                    }}
-                    disabled={!peerConnected}
-                    className={cn(
-                      "p-2.5 rounded-full transition-colors",
-                      peerConnected ? "hover:bg-secondary" : "opacity-40"
-                    )}
-                  >
-                    <Video size={22} className="sm:w-6 sm:h-6" />
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onLock();
-                    }}
-                    className="p-2.5 bg-destructive/10 text-destructive hover:bg-destructive hover:text-white rounded-full transition-colors"
-                  >
-                    <Lock size={22} className="sm:w-6 sm:h-6" />
-                  </button>
-                </div>
-              </>
-            )}
-          </header>
-
-          {/* Messages Area */}
-          <div
-            ref={scrollRef}
-            className="flex-1 overflow-y-auto px-4 py-3"
-            style={{ WebkitOverflowScrolling: "touch" }}
-          >
-            {messages.length === 0 && (
-              <div className="text-center py-8">
-                <div className="inline-flex items-center gap-2 text-muted-foreground px-4 py-2 text-sm">
-                  Start a conversation with {peerProfile.name}
-                </div>
-              </div>
-            )}
-
-            {messagesList}
-
-            {peerProfile.isTyping && (
-              <div className="flex justify-start px-4">
-                <div className="bg-card dark:bg-zinc-800 rounded-2xl px-4 py-3 shadow-sm border border-border/50">
-                  <div className="flex gap-1">
-                    <span
-                      className="w-2 h-2 bg-muted-foreground/60 rounded-full animate-bounce"
-                      style={{ animationDelay: "0ms" }}
-                    />
-                    <span
-                      className="w-2 h-2 bg-muted-foreground/60 rounded-full animate-bounce"
-                      style={{ animationDelay: "150ms" }}
-                    />
-                    <span
-                      className="w-2 h-2 bg-muted-foreground/60 rounded-full animate-bounce"
-                      style={{ animationDelay: "300ms" }}
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div ref={messagesEndRef} className="h-1" />
-          </div>
-
-          {/* Input Area */}
-          <div className="bg-background border-t border-border shrink-0 safe-area-bottom">
-            {replyingTo && (
-              <div className="px-3 pt-2">
-                <div className="flex items-center gap-2 px-3 py-2 bg-secondary/50 rounded-xl border-l-2 border-primary">
-                  <Reply size={16} className="text-primary shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-primary">
-                      Reply to {replyingTo.sender === "me" ? "yourself" : peerProfile.name}
-                    </p>
-                    <p className="text-xs text-muted-foreground truncate">{replyingTo.text}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setReplyingTo(null)}
-                    className="p-1 hover:bg-secondary rounded-full"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              </div>
-            )}
-            <div className="px-2 sm:px-3 py-2 sm:py-3">
-              <form onSubmit={handleSendText}>
-                <div
-                  className="
-                    flex items-end gap-1.5 sm:gap-2
-                    rounded-3xl bg-secondary/70 dark:bg-zinc-800
-                    px-2 sm:px-3 py-1.5
-                  "
-                >
-                  {/* Left icons */}
-                  {!isRecording && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={!isConnected}
-                        className="p-1.5 sm:p-2 text-muted-foreground hover:bg-secondary rounded-full disabled:opacity-40 transition-colors shrink-0 mb-0.5"
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowSidebar(true);
+                      }}
+                      className="p-2 md:hidden hover:bg-secondary rounded-lg shrink-0 transition-all duration-200 ease-out hover:scale-105 active:scale-95"
+                    >
+                      <Menu size={20} />
+                    </button>
+                    <Avatar className="h-9 w-9 sm:h-10 sm:w-10 shrink-0">
+                      <AvatarImage src={peerProfile.avatar} />
+                      <AvatarFallback>
+                        {peerProfile.name.charAt(0).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0">
+                      <h2 className="font-semibold text-sm truncate">
+                        {peerProfile.name}
+                      </h2>
+                      <span
+                        className={cn(
+                          "text-xs truncate block transition-colors",
+                          peerConnected
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-muted-foreground"
+                        )}
                       >
-                        <Paperclip size={18} />
-                      </button>
+                        {peerProfile.isTyping ? (
+                          <span className="text-green-500">typing...</span>
+                        ) : (
+                          getLastSeenText
+                        )}
+                      </span>
+                    </div>
+                  </div>
 
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <button
-                            type="button"
-                            className="p-1.5 sm:p-2 text-muted-foreground hover:bg-secondary rounded-full transition-colors shrink-0 mb-0.5"
-                          >
-                            <Smile size={18} />
-                          </button>
-                        </PopoverTrigger>
-                        <PopoverContent
-                          className="w-auto p-0"
-                          align="start"
-                          side="top"
-                        >
-                          <EmojiPicker
-                            onSelect={(emoji) =>
-                              setInputText((prev) => prev + emoji)
-                            }
-                          />
-                        </PopoverContent>
-                      </Popover>
-                    </>
-                  )}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        peerConnected && startCall("voice");
+                      }}
+                      disabled={!peerConnected}
+                      className={cn(
+                        "p-2.5 rounded-full transition-colors",
+                        peerConnected ? "hover:bg-secondary" : "opacity-40"
+                      )}
+                    >
+                      <Phone size={22} className="sm:w-6 sm:h-6" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        peerConnected && startCall("video");
+                      }}
+                      disabled={!peerConnected}
+                      className={cn(
+                        "p-2.5 rounded-full transition-colors",
+                        peerConnected ? "hover:bg-secondary" : "opacity-40"
+                      )}
+                    >
+                      <Video size={22} className="sm:w-6 sm:h-6" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onLock();
+                      }}
+                      className="p-2.5 bg-destructive/10 text-destructive hover:bg-destructive hover:text-white rounded-full transition-colors"
+                    >
+                      <Lock size={22} className="sm:w-6 sm:h-6" />
+                    </button>
+                  </div>
+                </>
+              )}
+            </header>
 
-                  {/* Middle: textarea / recording */}
-                  <div className="flex-1 flex items-end min-h-9 sm:min-h-10">
-                    {isRecording ? (
-                      <div className="flex items-center gap-2 w-full py-1">
-                        <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
-                        <span className="text-red-500 text-sm font-mono flex-1">
-                          Recording {Math.floor(recordingTime / 60)}:
-                          {(recordingTime % 60)
-                            .toString()
-                            .padStart(2, "0")}
-                        </span>
+            {/* Messages Area */}
+            <div
+              ref={scrollRef}
+              className="flex-1 overflow-y-auto px-4 py-3 min-h-0"
+              style={{ WebkitOverflowScrolling: "touch" }}
+            >
+              {messages.length === 0 && (
+                <div className="text-center py-8">
+                  <div className="inline-flex items-center gap-2 text-muted-foreground px-4 py-2 text-sm">
+                    Start a conversation with {peerProfile.name}
+                  </div>
+                </div>
+              )}
+
+              {messagesList}
+
+              {peerProfile.isTyping && (
+                <div className="flex justify-start px-4">
+                  <div className="bg-card dark:bg-zinc-800 rounded-2xl px-4 py-3 shadow-sm border border-border/50">
+                    <div className="flex gap-1">
+                      <span
+                        className="w-2 h-2 bg-muted-foreground/60 rounded-full animate-bounce"
+                        style={{ animationDelay: "0ms" }}
+                      />
+                      <span
+                        className="w-2 h-2 bg-muted-foreground/60 rounded-full animate-bounce"
+                        style={{ animationDelay: "150ms" }}
+                      />
+                      <span
+                        className="w-2 h-2 bg-muted-foreground/60 rounded-full animate-bounce"
+                        style={{ animationDelay: "300ms" }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef} className="h-1" />
+            </div>
+
+            {/* Input Area */}
+            <div className="bg-background border-t border-border shrink-0 safe-area-bottom">
+              {replyingTo && (
+                <div className="px-3 pt-2">
+                  <div className="flex items-center gap-2 px-3 py-2 bg-secondary/50 rounded-xl border-l-2 border-primary">
+                    <Reply size={16} className="text-primary shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-primary">
+                        Reply to {replyingTo.sender === "me" ? "yourself" : peerProfile.name}
+                      </p>
+                      <p className="text-xs text-muted-foreground truncate">{replyingTo.text}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setReplyingTo(null)}
+                      className="p-1 hover:bg-secondary rounded-full"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="px-2 sm:px-3 py-2 sm:py-3">
+                <form onSubmit={handleSendText}>
+                  <div
+                    className="
+                      flex items-end gap-1.5 sm:gap-2
+                      rounded-3xl bg-secondary/70 dark:bg-zinc-800
+                      px-2 sm:px-3 py-1.5
+                    "
+                  >
+                    {/* Left icons */}
+                    {!isRecording && (
+                      <>
                         <button
                           type="button"
-                          onClick={cancelRecording}
-                          className="p-1.5 hover:bg-red-500/20 rounded-full transition-colors"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={!isConnected}
+                          className="p-1.5 sm:p-2 text-muted-foreground hover:bg-secondary rounded-full disabled:opacity-40 transition-colors shrink-0 mb-0.5"
                         >
-                          <X size={18} className="text-red-500" />
+                          <Paperclip size={18} />
                         </button>
-                      </div>
-                    ) : (
-                  <textarea
-                        ref={textareaRef}
-                        value={inputText}
-                        onChange={handleInputChange}
-                        onKeyDown={handleKeyDown}
-                        placeholder={
-                          isConnected ? "Message..." : "Connecting..."
-                        }
+
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              type="button"
+                              className="p-1.5 sm:p-2 text-muted-foreground hover:bg-secondary rounded-full transition-colors shrink-0 mb-0.5"
+                            >
+                              <Smile size={18} />
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent
+                            className="w-auto p-0"
+                            align="start"
+                            side="top"
+                          >
+                            <EmojiPicker
+                              onSelect={(emoji) =>
+                                setInputText((prev) => prev + emoji)
+                              }
+                            />
+                          </PopoverContent>
+                        </Popover>
+                      </>
+                    )}
+
+                    {/* Middle: textarea / recording */}
+                    <div className="flex-1 flex items-end min-h-9 sm:min-h-10 min-w-0">
+                      {isRecording ? (
+                        <div className="flex items-center gap-2 w-full py-1">
+                          <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
+                          <span className="text-red-500 text-sm font-mono flex-1">
+                            Recording {Math.floor(recordingTime / 60)}:
+                            {(recordingTime % 60)
+                              .toString()
+                              .padStart(2, "0")}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={cancelRecording}
+                            className="p-1.5 hover:bg-red-500/20 rounded-full transition-colors"
+                          >
+                            <X size={18} className="text-red-500" />
+                          </button>
+                        </div>
+                      ) : (
+                        <textarea
+                          ref={textareaRef}
+                          value={inputText}
+                          onChange={handleInputChange}
+                          onKeyDown={handleKeyDown}
+                          placeholder={
+                            isConnected ? "Message..." : "Connecting..."
+                          }
+                          disabled={!isConnected}
+                          rows={1}
+                          className={cn(
+                            "flex-1 bg-transparent border-none outline-none",
+                            "text-[15px] leading-[1.4] disabled:opacity-50",
+                            "w-full resize-none overflow-y-auto overflow-x-hidden",
+                            "placeholder:text-muted-foreground/60",
+                            "text-foreground break-words whitespace-pre-wrap",
+                            "py-1.5 transition-all duration-200 ease-in-out",
+                            "focus:outline-none focus:ring-0",
+                            "max-h-[150px]"
+                          )}
+                          style={{
+                            height: "auto",
+                            minHeight: "24px",
+                          }}
+                          onFocus={() => setIsTextareaFocused(true)}
+                          onBlur={() => setIsTextareaFocused(false)}
+                        />
+                      )}
+                    </div>
+
+                    {/* Right: send / mic / stop */}
+                    {isRecording ? (
+                      <button
+                        type="button"
+                        onClick={handleStopRecording}
+                        className="p-2 sm:p-2.5 rounded-full bg-red-500 shrink-0 hover:bg-red-600 transition-colors"
+                      >
+                        <Square
+                          size={18}
+                          className="text-white"
+                          fill="white"
+                        />
+                      </button>
+                    ) : inputText.trim() ? (
+                      <button
+                        type="submit"
                         disabled={!isConnected}
-                        rows={1}
-                        className={cn(
-                          "flex-1 bg-transparent border-none outline-none",
-                          "text-[15px] leading-[1.4] disabled:opacity-50",
-                          "w-full resize-none overflow-y-auto overflow-x-hidden",
-                          "placeholder:text-muted-foreground/60",
-                          "text-foreground break-words whitespace-pre-wrap",
-                          "py-1.5 transition-all duration-200 ease-in-out",
-                          "focus:outline-none focus:ring-0",
-                          "max-h-[150px]"
-                        )}
-                        style={{
-                          height: "auto",
-                          minHeight: "24px",
-                        }}
-                        onFocus={() => setIsTextareaFocused(true)}
-                        onBlur={() => setIsTextareaFocused(false)}
-                      />
+                        className="p-2 sm:p-2.5 rounded-full bg-primary disabled:opacity-40 shrink-0 hover:bg-primary/90 transition-colors"
+                      >
+                        <Send size={18} className="text-white" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleStartRecording}
+                        disabled={!isConnected}
+                        className="p-2 sm:p-2.5 text-muted-foreground hover:bg-secondary rounded-full disabled:opacity-40 shrink-0 transition-colors"
+                      >
+                        <Mic size={18} />
+                      </button>
                     )}
                   </div>
-
-                  {/* Right: send / mic / stop */}
-                  {isRecording ? (
-                    <button
-                      type="button"
-                      onClick={handleStopRecording}
-                      className="p-2 sm:p-2.5 rounded-full bg-red-500 flex-shrink-0 hover:bg-red-600 transition-colors"
-                    >
-                      <Square
-                        size={18}
-                        className="text-white"
-                        fill="white"
-                      />
-                    </button>
-                  ) : inputText.trim() ? (
-                    <button
-                      type="submit"
-                      disabled={!isConnected}
-                      className="p-2 sm:p-2.5 rounded-full bg-primary disabled:opacity-40 flex-shrink-0 hover:bg-primary/90 transition-colors"
-                    >
-                      <Send size={18} className="text-white" />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleStartRecording}
-                      disabled={!isConnected}
-                      className="p-2 sm:p-2.5 text-muted-foreground hover:bg-secondary rounded-full disabled:opacity-40 flex-shrink-0 transition-colors"
-                    >
-                      <Mic size={18} />
-                    </button>
-                  )}
-                </div>
-              </form>
+                </form>
+              </div>
             </div>
           </div>
-        </div>
         </div>
       </div>
     </div>
