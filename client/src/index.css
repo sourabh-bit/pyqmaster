@@ -117,10 +117,84 @@
   }
   html, body, #root {
     height: 100%;
+    height: 100dvh;
+    overflow: hidden;
   }
   body {
     @apply font-sans antialiased bg-background text-foreground;
+    position: fixed;
+    width: 100%;
+    overscroll-behavior: none;
   }
+}
+
+/* Mobile viewport fix for keyboard */
+@supports (height: 100dvh) {
+  html, body, #root {
+    height: 100dvh;
+  }
+}
+
+/* Safe area padding for iOS notch/home indicator */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-area-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+/* Prevent body scroll on mobile when keyboard is open */
+.keyboard-open {
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+  height: 100%;
+}
+
+/* Chat container mobile optimization */
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Message selection highlight */
+.message-selected {
+  background-color: rgba(37, 211, 102, 0.2) !important;
+  border-radius: 12px;
+  margin: 2px 0;
+}
+
+/* Smooth textarea auto-grow - WhatsApp style */
+.chat-textarea {
+  transition: height 0.08s ease-out;
+  -webkit-appearance: none;
+  appearance: none;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.2) transparent;
+}
+
+.chat-textarea::-webkit-scrollbar {
+  width: 4px;
+}
+
+.chat-textarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-textarea::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.2);
+  border-radius: 2px;
+}
+
+/* Prevent text selection during long press */
+.no-select {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 /* Smooth transitions for theme changes */
@@ -197,4 +271,32 @@ textarea.focus\:ring-0:focus-visible {
 /* GPU acceleration hints for smooth animations */
 .will-change-transform {
   will-change: transform;
+}
+
+/* Smooth message entry animation */
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message-enter {
+  animation: messageSlideIn 0.2s ease-out;
+}
+
+/* Selection mode header transition */
+.selection-header {
+  transition: background-color 0.2s ease-out, transform 0.15s ease-out;
+}
+
+/* Improve overscroll behavior */
+.chat-messages-container {
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
 }

@@ -4,6 +4,7 @@ import React, {
   useRef,
   useMemo,
   useCallback,
+  useLayoutEffect,
 } from "react";
 import {
   Send,
@@ -204,19 +205,52 @@ export function ChatLayout({
     }
   }, [selectedMessages, isSelectMode]);
 
-  // input change
+  // Handle mobile keyboard visibility
+  useLayoutEffect(() => {
+    const handleResize = () => {
+      if (window.visualViewport) {
+        const viewport = window.visualViewport;
+        const isKeyboardOpen = viewport.height < window.innerHeight * 0.75;
+        
+        if (isKeyboardOpen) {
+          document.body.classList.add("keyboard-open");
+        } else {
+          document.body.classList.remove("keyboard-open");
+        }
+        
+        // Scroll to bottom when keyboard opens
+        if (isKeyboardOpen) {
+          setTimeout(scrollToBottom, 100);
+        }
+      }
+    };
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", handleResize);
+      return () => window.visualViewport?.removeEventListener("resize", handleResize);
+    }
+  }, [scrollToBottom]);
+
+  // input change with WhatsApp-style growth (max 6 lines)
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const el = e.target;
       setInputText(el.value);
       handleTyping();
 
-      // auto-grow textarea
+      // Reset height to auto to get accurate scrollHeight
       el.style.height = "auto";
-      const sh = el.scrollHeight;
-      const newHeight = Math.min(Math.max(sh, 24), 200);
+      
+      // Calculate line height (approximately 24px per line)
+      const lineHeight = 24;
+      const maxLines = 6;
+      const maxHeight = lineHeight * maxLines;
+      
+      const scrollHeight = el.scrollHeight;
+      const newHeight = Math.min(Math.max(scrollHeight, lineHeight), maxHeight);
+      
       el.style.height = `${newHeight}px`;
-      el.style.overflowY = sh > 200 ? "auto" : "hidden";
+      el.style.overflowY = scrollHeight > maxHeight ? "auto" : "hidden";
     },
     [handleTyping]
   );
@@ -291,11 +325,28 @@ export function ChatLayout({
     }
   }, [stopRecording, sendMessage, recordingTime]);
 
-  // long press -> select mode
+  // long press -> select mode (with haptic feedback on supported devices)
   const handleMessageLongPress = useCallback((msgId: string) => {
     setIsSelectMode(true);
     setSelectedMessages(new Set([msgId]));
   }, []);
+
+  const handleMediaClick = useCallback(
+    (url: string, type: "image" | "video") => {
+      setSelectedMedia({ url, type });
+    },
+    []
+  );
+
+  // Handle reply action
+  const handleReplyAction = useCallback((msg: Message) => {
+    if (isSelectMode) return;
+    if ((msg.type === "image" || msg.type === "video") && msg.mediaUrl) {
+      handleMediaClick(msg.mediaUrl, msg.type);
+    } else {
+      handleReply(msg);
+    }
+  }, [isSelectMode, handleMediaClick, handleReply]);
 
   const handleSelectMessage = useCallback((msgId: string) => {
     setSelectedMessages((prev) => {
@@ -318,13 +369,6 @@ export function ChatLayout({
     setSelectedMessages(new Set());
     setIsSelectMode(false);
   }, []);
-
-  const handleMediaClick = useCallback(
-    (url: string, type: "image" | "video") => {
-      setSelectedMedia({ url, type });
-    },
-    []
-  );
 
   // last seen
   const getLastSeenText = useMemo(() => {
@@ -357,13 +401,7 @@ export function ChatLayout({
           isSelectMode={isSelectMode}
           onSelect={handleSelectMessage}
           onLongPress={handleMessageLongPress}
-          onReply={(m) => {
-            if ((m.type === "image" || m.type === "video") && m.mediaUrl) {
-              handleMediaClick(m.mediaUrl, m.type);
-            } else {
-              handleReply(m);
-            }
-          }}
+          onReply={handleReplyAction}
         />
       )),
     [
@@ -372,14 +410,24 @@ export function ChatLayout({
       isSelectMode,
       handleSelectMessage,
       handleMessageLongPress,
-      handleReply,
-      handleMediaClick,
+      handleReplyAction,
     ]
+  );
+
+  // Handle click outside messages to deselect
+  const handleContainerClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (isSelectMode && e.target === e.currentTarget) {
+        setSelectedMessages(new Set());
+        setIsSelectMode(false);
+      }
+    },
+    [isSelectMode]
   );
 
   return (
     <div className="w-full h-full flex items-center justify-center bg-[#0a1014]">
-      <div className="w-full h-full md:h-[94vh] md:my-3 max-w-6xl flex bg-[#0A1014] md:rounded-2xl shadow-2xl overflow-hidden md:overflow-visible">
+      <div className="w-full h-dvh md:h-[94vh] md:my-3 max-w-6xl flex bg-[#0A1014] md:rounded-2xl shadow-2xl overflow-hidden md:overflow-visible">
         {/* MOBILE SIDEBAR OVERLAY */}
         {showSidebar && (
           <div
@@ -592,7 +640,7 @@ export function ChatLayout({
         </div>
 
         {/* MAIN CHAT AREA */}
-        <div className="flex-1 flex flex-col bg-[#0B141A] h-screen md:h-auto">
+        <div className="flex-1 flex flex-col bg-[#0B141A] h-dvh md:h-auto overflow-hidden chat-container">
           {/* Incoming Call Dialog */}
           <Dialog
             open={!!incomingCall}
@@ -763,8 +811,8 @@ export function ChatLayout({
           {/* HEADER */}
           <header
             className={cn(
-              "h-14 sm:h-16 flex items-center justify-between px-2 sm:px-4 border-b border-black/40 bg-[#202c33] sticky top-0 z-50",
-              isSelectMode && "bg-emerald-900/70"
+              "h-14 sm:h-16 flex items-center justify-between px-2 sm:px-4 border-b border-black/40 z-50 shrink-0 safe-area-top selection-header",
+              isSelectMode ? "bg-emerald-900/90" : "bg-[#202c33]"
             )}
             onClick={!isSelectMode ? handleHeaderDoubleTap : undefined}
           >
@@ -877,8 +925,12 @@ export function ChatLayout({
           {/* MESSAGES */}
           <div
             ref={scrollRef}
-            className="flex-1 min-h-0 overflow-y-auto px-2 sm:px-4 pt-3 pb-3 bg-[#0B141A]"
-            style={{ WebkitOverflowScrolling: "touch" }}
+            className="flex-1 min-h-0 overflow-y-auto px-2 sm:px-4 pt-3 pb-3 bg-[#0B141A] overscroll-contain"
+            style={{ 
+              WebkitOverflowScrolling: "touch",
+              touchAction: isSelectMode ? "none" : "pan-y",
+            }}
+            onClick={handleContainerClick}
           >
             {messages.length === 0 && (
               <div className="flex items-center justify-center py-8">
@@ -915,7 +967,7 @@ export function ChatLayout({
           </div>
 
           {/* INPUT */}
-          <div className="bg-[#202c33] border-t border-black/40">
+          <div className="bg-[#202c33] border-t border-black/40 shrink-0 safe-area-bottom">
             {replyingTo && (
               <div className="px-3 pt-2">
                 <div className="flex items-center gap-2 px-3 py-2 bg-[#18252f] rounded-xl border-l-2 border-emerald-500">
@@ -1008,13 +1060,20 @@ export function ChatLayout({
                         disabled={!isConnected}
                         rows={1}
                         className={cn(
-                          "flex-1 bg-transparent border-none outline-none text-[15px] leading-[1.4] text-zinc-100",
-                          "w-full resize-none overflow-y-auto overflow-x-hidden",
+                          "flex-1 bg-transparent text-[15px] leading-[1.5] text-zinc-100",
+                          "w-full resize-none overflow-x-hidden chat-textarea",
                           "placeholder:text-zinc-500",
-                          "py-1.5 max-h-[150px]",
-                          "focus:outline-none focus:ring-0 focus:border-none"
+                          "py-1.5",
+                          "border-none outline-none ring-0",
+                          "focus:outline-none focus:ring-0 focus:border-none focus:shadow-none"
                         )}
-                        style={{ height: "auto", minHeight: "24px" }}
+                        style={{ 
+                          height: "24px",
+                          minHeight: "24px",
+                          maxHeight: "144px",
+                          border: "none",
+                          boxShadow: "none",
+                        }}
                       />
                     )}
                   </div>

@@ -13,6 +13,9 @@ interface Passwords {
   gatekeeper_key: string;
   admin_pass: string;
   friend_pass: string;
+  admin_pass_changed_at?: string | null;
+  friend_pass_changed_at?: string | null;
+  gatekeeper_changed_at?: string | null;
 }
 
 export function LoginOverlay({ isOpen, onSuccess, onClose }: LoginOverlayProps) {
