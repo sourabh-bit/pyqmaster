@@ -1,5 +1,5 @@
 // Service Worker for PWA and Push Notifications
-const CACHE_NAME = 'secure-chat-v2';
+const CACHE_NAME = 'secure-chat-v3';
 const OFFLINE_URL = '/';
 
 // Assets to cache for offline
