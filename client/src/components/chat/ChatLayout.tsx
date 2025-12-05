@@ -331,7 +331,7 @@ export function ChatLayout({
       }
 
       const result = await response.json();
-      return result.url;
+      return result.mediaUrl;
     } catch (error) {
       console.error('Upload error:', error);
       toast({ variant: 'destructive', title: 'Failed to upload media' });

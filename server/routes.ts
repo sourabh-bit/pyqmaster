@@ -518,10 +518,10 @@ export async function registerRoutes(
       const url = await uploadToCloudinary(data, resourceType);
 
       if (!url) {
-        return res.status(500).json({ error: 'Upload failed' });
+        return res.status(500).json({ success: false, error: 'Upload failed' });
       }
 
-      res.json({ url });
+      res.json({ success: true, mediaUrl: url });
     } catch (error) {
       console.error('Upload error:', error);
       res.status(500).json({ error: 'Upload failed' });
