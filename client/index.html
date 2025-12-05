@@ -2,25 +2,48 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+
+    <!-- Prevent aggressive caching on some browsers -->
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no"
+    />
 
     <!-- Disguised Meta Tags -->
     <meta property="og:title" content="JEE Advanced Physics PYQ Archive" />
-    <meta property="og:description" content="Comprehensive collection of Previous Year Questions for JEE Advanced Physics." />
+    <meta
+      property="og:description"
+      content="Comprehensive collection of Previous Year Questions for JEE Advanced Physics."
+    />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content="JEE Advanced Physics PYQ Archive" />
-    <meta name="twitter:description" content="Comprehensive collection of Previous Year Questions for JEE Advanced Physics." />
-    
+    <meta
+      name="twitter:description"
+      content="Comprehensive collection of Previous Year Questions for JEE Advanced Physics."
+    />
+
     <link rel="icon" type="image/png" href="/favicon.png" />
-    
+
     <!-- Fonts: Inter (UI), Lora (Academic), JetBrains Mono (Calculator/Code) -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&family=Lora:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
-    
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&family=Lora:ital,wght@0,400;0,600;1,400&display=swap"
+      rel="stylesheet"
+    />
+
     <!-- KaTeX for Math rendering (Disguise realism) -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"
+      integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV"
+      crossorigin="anonymous"
+    />
 
     <!-- PWA Manifest -->
     <link rel="manifest" href="/manifest.json" />
@@ -28,10 +51,35 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="apple-touch-icon" href="/favicon.png" />
-
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+
+    <!-- Simple versioning + auto-update logic -->
+    <script>
+      (function () {
+        // 🔢 Change this when you deploy a new version
+        var APP_VERSION = "1.0.0";
+
+        var KEY = "app_version";
+        var stored = localStorage.getItem(KEY);
+
+        if (!stored) {
+          // First load on this device
+          localStorage.setItem(KEY, APP_VERSION);
+        } else if (stored !== APP_VERSION) {
+          // New version deployed -> update stored version and hard reload once
+          localStorage.setItem(KEY, APP_VERSION);
+          // Force reload to get fresh JS/CSS instead of cached bundle
+          window.location.reload();
+        }
+
+        // Expose if you ever want to read it inside the app
+        window.__APP_VERSION__ = APP_VERSION;
+      })();
+    </script>
+
+    <!-- Main bundle with cache-busting query param -->
+    <script type="module" src="/src/main.tsx?v=1.0.0"></script>
   </body>
 </html>

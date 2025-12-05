@@ -15,14 +15,15 @@ export default defineConfig({
     process.env.REPL_ID !== undefined
       ? [
           await import("@replit/vite-plugin-cartographer").then((m) =>
-            m.cartographer(),
+            m.cartographer()
           ),
           await import("@replit/vite-plugin-dev-banner").then((m) =>
-            m.devBanner(),
+            m.devBanner()
           ),
         ]
       : []),
   ],
+
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),
@@ -30,19 +31,35 @@ export default defineConfig({
       "@assets": path.resolve(import.meta.dirname, "attached_assets"),
     },
   },
+
   css: {
     postcss: {
       plugins: [],
     },
   },
+
   root: path.resolve(import.meta.dirname, "client"),
+
   build: {
     outDir: "../dist/public",
     emptyOutDir: true,
+
+    // ✅ Vite will append hashes to files, forcing browser to update
+    assetsDir: "assets",
+    rollupOptions: {},
   },
+
   server: {
     host: "0.0.0.0",
     allowedHosts: true,
+
+    // Prevent local caching during development
+    headers: {
+      "Cache-Control": "no-store",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    },
+
     fs: {
       strict: true,
       deny: ["**/.*"],

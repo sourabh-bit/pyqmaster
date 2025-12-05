@@ -24,6 +24,9 @@ interface UserProfile {
   isTyping: boolean;
 }
 
+// Use same room id everywhere (server + retention + frontend)
+const FIXED_ROOM_ID = 'secure-room-001';
+
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -51,15 +54,12 @@ const ICE_SERVERS = {
   iceCandidatePoolSize: 10
 };
 
-const FIXED_ROOM_ID = 'SECURE_CHAT_MAIN';
-
 let swRegistration: ServiceWorkerRegistration | null = null;
 
 const registerServiceWorker = async () => {
   if ('serviceWorker' in navigator) {
     try {
       swRegistration = await navigator.serviceWorker.register('/sw.js');
-      console.log('Service Worker registered');
       return swRegistration;
     } catch (err) {
       console.log('Service Worker registration failed:', err);
@@ -71,14 +71,14 @@ const registerServiceWorker = async () => {
 
 const subscribeToPush = async (registration: ServiceWorkerRegistration) => {
   try {
-    // Get VAPID public key from server
     const response = await fetch('/api/push/vapid-key');
     const { publicKey } = await response.json();
-    
-    // Convert VAPID key to Uint8Array
+
     const urlBase64ToUint8Array = (base64String: string) => {
       const padding = '='.repeat((4 - base64String.length % 4) % 4);
-      const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const base64 = (base64String + padding)
+        .replace(/-/g, '+')
+        .replace(/_/g, '/');
       const rawData = window.atob(base64);
       const outputArray = new Uint8Array(rawData.length);
       for (let i = 0; i < rawData.length; ++i) {
@@ -86,14 +86,13 @@ const subscribeToPush = async (registration: ServiceWorkerRegistration) => {
       }
       return outputArray;
     };
-    
-    // Subscribe to push
+
     const subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(publicKey)
     });
-    
-    // Send subscription to server (admin only)
+
+    // Only admin subscribes to push
     await fetch('/api/push/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -102,59 +101,57 @@ const subscribeToPush = async (registration: ServiceWorkerRegistration) => {
         userType: 'admin'
       })
     });
-    
-    console.log('Push subscription successful');
   } catch (err) {
     console.error('Push subscription failed:', err);
   }
 };
 
 const requestNotificationPermission = async () => {
-  if ('Notification' in window && Notification.permission === 'default') {
+  if (!('Notification' in window)) return;
+
+  if (Notification.permission === 'default') {
     const permission = await Notification.requestPermission();
     if (permission === 'granted') {
       const registration = await registerServiceWorker();
-      if (registration) {
-        await subscribeToPush(registration);
-      }
+      if (registration) await subscribeToPush(registration);
     }
   } else if (Notification.permission === 'granted') {
     const registration = await registerServiceWorker();
-    if (registration) {
-      await subscribeToPush(registration);
-    }
+    if (registration) await subscribeToPush(registration);
   }
 };
 
 const showBrowserNotification = (title: string, body: string, icon?: string) => {
-  if ('Notification' in window && Notification.permission === 'granted') {
-    // Try Service Worker notification first (works in background)
-    if (swRegistration) {
-      swRegistration.showNotification(title, {
-        body,
-        icon: icon || '/favicon.png',
-        tag: 'chat-notification',
-        vibrate: [200, 100, 200]
-      } as NotificationOptions);
-    } else if (document.hidden) {
-      // Fallback to regular notification
-      new Notification(title, { body, icon: icon || '/favicon.png', tag: 'chat-notification' });
-    }
+  if (!('Notification' in window) || Notification.permission !== 'granted') {
+    return;
+  }
+
+  if (swRegistration) {
+    swRegistration.showNotification(title, {
+      body,
+      icon: icon || '/favicon.png',
+      tag: 'chat-notification',
+      vibrate: [200, 100, 200]
+    } as NotificationOptions);
+  } else if (document.hidden) {
+    new Notification(title, {
+      body,
+      icon: icon || '/favicon.png',
+      tag: 'chat-notification'
+    });
   }
 };
 
-// Migrate old localStorage keys to new format
+// Clean old keys that can confuse things
 const migrateLocalStorage = (userType: 'admin' | 'friend') => {
-  // Clean up old profile keys that might cause confusion
   const oldKeys = ['profile_admin', 'profile_friend'];
-  oldKeys.forEach(key => {
+  oldKeys.forEach((key) => {
     if (localStorage.getItem(key)) {
       localStorage.removeItem(key);
     }
   });
 };
 
-// Log connection events
 const logConnectionEvent = (user: string, action: string) => {
   const logs = JSON.parse(localStorage.getItem('connection_logs') || '[]');
   logs.push({
@@ -162,23 +159,21 @@ const logConnectionEvent = (user: string, action: string) => {
     user,
     action
   });
-  // Keep only last 100 logs
   localStorage.setItem('connection_logs', JSON.stringify(logs.slice(-100)));
 };
 
 export function useChatConnection(userType: 'admin' | 'friend') {
   const { toast } = useToast();
 
-  // Run migration on first load
   useEffect(() => {
     migrateLocalStorage(userType);
   }, [userType]);
-  
+
   const [isConnected, setIsConnected] = useState(false);
   const [peerConnected, setPeerConnected] = useState(false);
-  
+
   const defaultPeerName = userType === 'admin' ? 'Friend' : 'Admin';
-  
+
   const [myProfile, setMyProfile] = useState<UserProfile>(() => {
     const saved = localStorage.getItem(`chat_my_profile_${userType}`);
     if (saved) {
@@ -196,16 +191,16 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       isTyping: false
     };
   });
-  
+
   const [peerProfile, setPeerProfile] = useState<UserProfile>(() => {
     const saved = localStorage.getItem(`chat_peer_profile_${userType}`);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        return { 
-          ...parsed, 
-          lastSeen: parsed.lastSeen ? new Date(parsed.lastSeen) : null, 
-          isTyping: false 
+        return {
+          ...parsed,
+          lastSeen: parsed.lastSeen ? new Date(parsed.lastSeen) : null,
+          isTyping: false
         };
       } catch {
         localStorage.removeItem(`chat_peer_profile_${userType}`);
@@ -218,20 +213,24 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       isTyping: false
     };
   });
-  
+
+  // Admin only: notifications
   useEffect(() => {
     if (userType === 'admin') {
       requestNotificationPermission();
     }
   }, [userType]);
-  
+
   const [messages, setMessages] = useState<Message[]>(() => {
     const saved = localStorage.getItem(`chat_messages_${userType}`);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) }));
+          return parsed.map((m: any) => ({
+            ...m,
+            timestamp: new Date(m.timestamp)
+          }));
         }
       } catch {
         localStorage.removeItem(`chat_messages_${userType}`);
@@ -239,10 +238,15 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     }
     return [];
   });
-  
+
   const [activeCall, setActiveCall] = useState<'voice' | 'video' | null>(null);
-  const [incomingCall, setIncomingCall] = useState<{ type: 'voice' | 'video'; from: string } | null>(null);
-  const [callStatus, setCallStatus] = useState<'idle' | 'calling' | 'ringing' | 'connected'>('idle');
+  const [incomingCall, setIncomingCall] = useState<{
+    type: 'voice' | 'video';
+    from: string;
+  } | null>(null);
+  const [callStatus, setCallStatus] = useState<
+    'idle' | 'calling' | 'ringing' | 'connected'
+  >('idle');
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isMuted, setIsMuted] = useState(false);
@@ -255,37 +259,58 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const currentCallType = useRef<'voice' | 'video' | null>(null);
-  
-  // Unique device ID for message sync
-  const deviceId = useRef<string>(localStorage.getItem('device_id') || (() => {
-    const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    localStorage.setItem('device_id', id);
-    return id;
-  })());
 
-  // Session ID for this connection
-  const sessionId = useRef<string>(`${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
+  // Stable per-device + per-session ids
+  const deviceId = useRef<string>(
+    localStorage.getItem('device_id') ||
+      (() => {
+        const id = `${Date.now()}-${Math.random()
+          .toString(36)
+          .substr(2, 9)}`;
+        localStorage.setItem('device_id', id);
+        return id;
+      })()
+  );
+  const sessionId = useRef<string>(
+    `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+  );
 
+  // Persist messages / profiles
   useEffect(() => {
-    localStorage.setItem(`chat_messages_${userType}`, JSON.stringify(messages));
+    localStorage.setItem(
+      `chat_messages_${userType}`,
+      JSON.stringify(messages)
+    );
   }, [messages, userType]);
 
   useEffect(() => {
-    localStorage.setItem(`chat_my_profile_${userType}`, JSON.stringify({
-      name: myProfile.name,
-      avatar: myProfile.avatar
-    }));
+    localStorage.setItem(
+      `chat_my_profile_${userType}`,
+      JSON.stringify({
+        name: myProfile.name,
+        avatar: myProfile.avatar
+      })
+    );
   }, [myProfile.name, myProfile.avatar, userType]);
 
   useEffect(() => {
     if (peerProfile.name !== defaultPeerName || peerProfile.avatar) {
-      localStorage.setItem(`chat_peer_profile_${userType}`, JSON.stringify({
-        name: peerProfile.name,
-        avatar: peerProfile.avatar,
-        lastSeen: peerProfile.lastSeen
-      }));
+      localStorage.setItem(
+        `chat_peer_profile_${userType}`,
+        JSON.stringify({
+          name: peerProfile.name,
+          avatar: peerProfile.avatar,
+          lastSeen: peerProfile.lastSeen
+        })
+      );
     }
-  }, [peerProfile.name, peerProfile.avatar, peerProfile.lastSeen, defaultPeerName, userType]);
+  }, [
+    peerProfile.name,
+    peerProfile.avatar,
+    peerProfile.lastSeen,
+    defaultPeerName,
+    userType
+  ]);
 
   const getWebSocketUrl = () => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -294,16 +319,290 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
   const sendSignal = useCallback((data: any) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ ...data, roomId: FIXED_ROOM_ID }));
+      wsRef.current.send(
+        JSON.stringify({
+          ...data,
+          roomId: FIXED_ROOM_ID
+        })
+      );
     }
   }, []);
 
   const updateMyProfile = (updates: Partial<UserProfile>) => {
-    setMyProfile(prev => {
+    setMyProfile((prev) => {
       const updated = { ...prev, ...updates };
-      sendSignal({ type: 'profile-update', profile: { name: updated.name, avatar: updated.avatar } });
+      sendSignal({
+        type: 'profile-update',
+        profile: { name: updated.name, avatar: updated.avatar }
+      });
       return updated;
     });
+  };
+
+  const handleMessage = async (data: any) => {
+    switch (data.type) {
+      case 'joined': {
+        // Server tells us if peer already online and their profile
+        if (data.peerProfile) {
+          setPeerProfile((prev) => ({
+            ...prev,
+            ...data.peerProfile,
+            lastSeen: data.peerOnline ? null : prev.lastSeen,
+            isTyping: false
+          }));
+        }
+        setPeerConnected(Boolean(data.peerOnline));
+
+        // If peer is online, mark our existing "sent" messages as delivered
+        if (data.peerOnline) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.sender === 'me' && (m.status === 'sent' || m.status === 'sending')
+                ? { ...m, status: 'delivered' as const }
+                : m
+            )
+          );
+        }
+        break;
+      }
+
+      case 'peer-joined': {
+        setPeerConnected(true);
+        const peerName = data.profile?.name || defaultPeerName;
+        setPeerProfile((prev) => ({
+          ...prev,
+          name: data.profile?.name || prev.name,
+          avatar: data.profile?.avatar || prev.avatar,
+          lastSeen: null,
+          isTyping: false
+        }));
+        toast({ title: `${peerName} is online!` });
+
+        if (userType === 'admin') {
+          logConnectionEvent(peerName, 'Came online');
+          showBrowserNotification(
+            '💚 Friend Online',
+            `${peerName} just came online!`,
+            data.profile?.avatar
+          );
+        }
+
+        sendSignal({
+          type: 'profile-update',
+          profile: { name: myProfile.name, avatar: myProfile.avatar }
+        });
+        break;
+      }
+
+      case 'peer-left': {
+        setPeerConnected(false);
+        const leftPeerName = peerProfile.name || defaultPeerName;
+        setPeerProfile((prev) => ({
+          ...prev,
+          lastSeen: new Date(),
+          isTyping: false
+        }));
+        toast({ title: `${leftPeerName} went offline` });
+        if (userType === 'admin') {
+          logConnectionEvent(leftPeerName, 'Went offline');
+        }
+        cleanupCall();
+        break;
+      }
+
+      case 'profile-update': {
+        if (data.profile) {
+          setPeerProfile((prev) => ({
+            ...prev,
+            name: data.profile.name,
+            avatar: data.profile.avatar
+          }));
+        }
+        break;
+      }
+
+      case 'typing': {
+        setPeerProfile((prev) => ({
+          ...prev,
+          isTyping: Boolean(data.isTyping)
+        }));
+        break;
+      }
+
+      case 'chat-message': {
+        const msgSenderName = data.senderName || defaultPeerName;
+
+        // If server says sender = "me", it's our own message from another device
+        const incomingSender: 'me' | 'them' =
+          data.sender === 'me' ? 'me' : 'them';
+
+        const newMsg: Message = {
+          id: data.id || Date.now().toString(),
+          text: data.text || '',
+          sender: incomingSender,
+          timestamp: new Date(
+            typeof data.timestamp === 'number'
+              ? data.timestamp
+              : data.timestamp || Date.now()
+          ),
+          type: data.messageType || 'text',
+          mediaUrl: data.mediaUrl,
+          senderName: msgSenderName,
+          status: (data.status as Message['status']) || 'delivered',
+          replyTo: data.replyTo
+        };
+
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === newMsg.id)) return prev;
+          return [...prev, newMsg];
+        });
+
+        setPeerProfile((prev) => ({ ...prev, isTyping: false }));
+
+        // Send read receipt for messages we receive from peer
+        if (incomingSender === 'them') {
+          sendSignal({ type: 'message-read', ids: [newMsg.id] });
+        }
+
+        // Only admin gets notifications
+        if (userType === 'admin' && incomingSender === 'them') {
+          const msgPreview =
+            newMsg.type === 'text'
+              ? newMsg.text.length > 50
+                ? newMsg.text.substring(0, 50) + '...'
+                : newMsg.text
+              : newMsg.type === 'image'
+              ? '📷 Photo'
+              : newMsg.type === 'video'
+              ? '🎥 Video'
+              : newMsg.type === 'audio'
+              ? '🎤 Voice message'
+              : 'New message';
+
+          showBrowserNotification(`💬 ${msgSenderName}`, msgPreview);
+        }
+        break;
+      }
+
+      case 'call-request': {
+        currentCallType.current = data.callType;
+        setIncomingCall({ type: data.callType, from: data.from });
+        setCallStatus('ringing');
+        break;
+      }
+
+      case 'call-accepted': {
+        currentCallType.current = data.callType;
+        await initiateWebRTC(data.callType);
+        break;
+      }
+
+      case 'call-rejected': {
+        toast({ title: 'Call declined' });
+        setCallStatus('idle');
+        setActiveCall(null);
+        currentCallType.current = null;
+        break;
+      }
+
+      case 'offer': {
+        await handleOffer(data.sdp);
+        break;
+      }
+
+      case 'answer': {
+        await handleAnswer(data.sdp);
+        break;
+      }
+
+      case 'ice-candidate': {
+        await handleIceCandidate(data.candidate);
+        break;
+      }
+
+      case 'call-end': {
+        toast({ title: 'Call ended' });
+        cleanupCall();
+        break;
+      }
+
+      case 'message-queued': {
+        // Server queued message for offline peer -> mark as "sent" (one tick)
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === data.id ? { ...m, status: 'sent' as const } : m
+          )
+        );
+        break;
+      }
+
+      case 'message-status': {
+        // Server says delivered/read -> update ticks on our own messages only
+        setMessages((prev) =>
+          prev.map((m) =>
+            data.ids.includes(m.id) && m.sender === 'me'
+              ? {
+                  ...m,
+                  status: data.status as 'delivered' | 'read'
+                }
+              : m
+          )
+        );
+        break;
+      }
+
+      case 'emergency-wipe': {
+        setMessages([]);
+        localStorage.removeItem(`chat_messages_${userType}`);
+        toast({
+          title: '🚨 All messages wiped',
+          variant: 'destructive'
+        });
+        break;
+      }
+
+      case 'sync-request': {
+        const currentMessages = JSON.parse(
+          localStorage.getItem(`chat_messages_${userType}`) || '[]'
+        );
+        sendSignal({
+          type: 'sync-response',
+          targetDeviceId: data.targetDeviceId,
+          messages: currentMessages
+        });
+        break;
+      }
+
+      case 'sync-messages': {
+        if (data.messages && Array.isArray(data.messages)) {
+          setMessages((prev) => {
+            const existingIds = new Set(prev.map((m) => m.id));
+            const newMessages: Message[] = data.messages
+              .filter((m: any) => !existingIds.has(m.id))
+              .map((m: any) => ({
+                ...m,
+                timestamp: new Date(m.timestamp)
+              }));
+
+            if (newMessages.length > 0) {
+              const merged = [...prev, ...newMessages].sort(
+                (a, b) =>
+                  new Date(a.timestamp).getTime() -
+                  new Date(b.timestamp).getTime()
+              );
+              return merged;
+            }
+            return prev;
+          });
+        }
+        break;
+      }
+
+      case 'message-deleted': {
+        setMessages((prev) => prev.filter((m) => m.id !== data.id));
+        break;
+      }
+    }
   };
 
   const connect = useCallback(() => {
@@ -313,14 +612,16 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({
-        type: 'join',
-        roomId: FIXED_ROOM_ID,
-        profile: { name: myProfile.name, avatar: myProfile.avatar },
-        userType: userType,
-        deviceId: deviceId.current,
-        sessionId: sessionId.current
-      }));
+      ws.send(
+        JSON.stringify({
+          type: 'join',
+          roomId: FIXED_ROOM_ID,
+          profile: { name: myProfile.name, avatar: myProfile.avatar },
+          userType,
+          deviceId: deviceId.current,
+          sessionId: sessionId.current
+        })
+      );
       setIsConnected(true);
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
@@ -337,215 +638,14 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     ws.onclose = () => {
       setIsConnected(false);
       setPeerConnected(false);
-      setPeerProfile(prev => ({ ...prev, lastSeen: new Date(), isTyping: false }));
+      setPeerProfile((prev) => ({
+        ...prev,
+        lastSeen: new Date(),
+        isTyping: false
+      }));
       reconnectTimeoutRef.current = setTimeout(connect, 3000);
     };
-  }, [myProfile.name, myProfile.avatar]);
-
-  const handleMessage = async (data: any) => {
-    switch (data.type) {
-      case 'joined':
-        if (data.peerOnline && data.peerProfile) {
-          setPeerConnected(true);
-          setPeerProfile(prev => ({ ...prev, ...data.peerProfile, lastSeen: null, isTyping: false }));
-        } else if (data.peerProfile) {
-          setPeerProfile(prev => ({ ...prev, ...data.peerProfile }));
-        }
-        // Mark all sent messages as delivered if peer is online
-        if (data.peerOnline) {
-          setMessages(prev => prev.map(m => 
-            m.sender === 'me' && m.status === 'sent' ? { ...m, status: 'delivered' as const } : m
-          ));
-        }
-        break;
-
-      case 'peer-joined':
-        setPeerConnected(true);
-        const peerName = data.profile?.name || defaultPeerName;
-        setPeerProfile(prev => ({ 
-          ...prev, 
-          name: data.profile?.name || prev.name,
-          avatar: data.profile?.avatar || prev.avatar,
-          lastSeen: null, 
-          isTyping: false 
-        }));
-        toast({ title: `${peerName} is online!` });
-        
-        // Log friend coming online (only admin sees logs)
-        if (userType === 'admin') {
-          logConnectionEvent(peerName, 'Came online');
-          showBrowserNotification(
-            '💚 Friend Online',
-            `${peerName} just came online!`,
-            data.profile?.avatar
-          );
-        }
-        
-        sendSignal({ type: 'profile-update', profile: { name: myProfile.name, avatar: myProfile.avatar } });
-        break;
-
-      case 'peer-left':
-        setPeerConnected(false);
-        const leftPeerName = peerProfile.name || defaultPeerName;
-        setPeerProfile(prev => ({ ...prev, lastSeen: new Date(), isTyping: false }));
-        toast({ title: `${leftPeerName} went offline` });
-        
-        // Log friend going offline (only admin sees logs)
-        if (userType === 'admin') {
-          logConnectionEvent(leftPeerName, 'Went offline');
-        }
-        
-        cleanupCall();
-        break;
-
-      case 'profile-update':
-        if (data.profile) {
-          setPeerProfile(prev => ({ ...prev, name: data.profile.name, avatar: data.profile.avatar }));
-        }
-        break;
-
-      case 'typing':
-        setPeerProfile(prev => ({ ...prev, isTyping: data.isTyping }));
-        break;
-
-      case 'chat-message':
-        const msgSenderName = data.senderName || defaultPeerName;
-        const incomingSender = data.sender === 'me' ? 'me' : 'them';
-        const newMsg: Message = {
-          id: data.id || Date.now().toString(),
-          text: data.text,
-          sender: incomingSender,
-          timestamp: new Date(data.timestamp),
-          type: data.messageType || 'text',
-          mediaUrl: data.mediaUrl,
-          senderName: msgSenderName,
-          status: data.status || 'delivered',
-          replyTo: data.replyTo
-        };
-        
-        // Avoid duplicates
-        setMessages(prev => {
-          if (prev.some(m => m.id === newMsg.id)) return prev;
-          return [...prev, newMsg];
-        });
-        setPeerProfile(prev => ({ ...prev, isTyping: false }));
-        
-        // Send read receipt if message is from peer
-        if (incomingSender === 'them') {
-          sendSignal({ type: 'message-read', ids: [newMsg.id] });
-        }
-        
-        if (userType === 'admin' && incomingSender === 'them') {
-          const msgPreview = data.messageType === 'text' 
-            ? (data.text?.length > 50 ? data.text.substring(0, 50) + '...' : data.text)
-            : data.messageType === 'image' ? '📷 Photo'
-            : data.messageType === 'video' ? '🎥 Video'
-            : data.messageType === 'audio' ? '🎤 Voice message'
-            : 'New message';
-          showBrowserNotification(
-            `💬 ${msgSenderName}`,
-            msgPreview
-          );
-        }
-        break;
-
-      case 'call-request':
-        currentCallType.current = data.callType;
-        setIncomingCall({ type: data.callType, from: data.from });
-        setCallStatus('ringing');
-        break;
-
-      case 'call-accepted':
-        currentCallType.current = data.callType;
-        await initiateWebRTC(data.callType);
-        break;
-
-      case 'call-rejected':
-        toast({ title: "Call declined" });
-        setCallStatus('idle');
-        setActiveCall(null);
-        currentCallType.current = null;
-        break;
-
-      case 'offer':
-        await handleOffer(data.sdp);
-        break;
-
-      case 'answer':
-        await handleAnswer(data.sdp);
-        break;
-
-      case 'ice-candidate':
-        await handleIceCandidate(data.candidate);
-        break;
-
-      case 'call-end':
-        toast({ title: "Call ended" });
-        cleanupCall();
-        break;
-      
-      case 'message-queued':
-        // Update message status to sent
-        setMessages(prev => prev.map(m => 
-          m.id === data.id ? { ...m, status: 'sent' as const } : m
-        ));
-        break;
-      
-      case 'message-status':
-        // Update message statuses (delivered/read)
-        setMessages(prev => prev.map(m => 
-          data.ids.includes(m.id) && m.sender === 'me' 
-            ? { ...m, status: data.status as 'delivered' | 'read' } 
-            : m
-        ));
-        break;
-      
-      case 'emergency-wipe':
-        // Emergency wipe from server
-        setMessages([]);
-        localStorage.removeItem(`chat_messages_${userType}`);
-        toast({ title: "🚨 All messages wiped", variant: "destructive" });
-        break;
-      
-      case 'sync-request':
-        // Another device of same user type is requesting our messages
-        const currentMessages = JSON.parse(localStorage.getItem(`chat_messages_${userType}`) || '[]');
-        sendSignal({
-          type: 'sync-response',
-          targetDeviceId: data.targetDeviceId,
-          messages: currentMessages
-        });
-        break;
-      
-      case 'sync-messages':
-        // Received messages from another device - merge them
-        if (data.messages && Array.isArray(data.messages)) {
-          setMessages(prev => {
-            const existingIds = new Set(prev.map(m => m.id));
-            const newMessages = data.messages
-              .filter((m: any) => !existingIds.has(m.id))
-              .map((m: any) => ({
-                ...m,
-                timestamp: new Date(m.timestamp)
-              }));
-
-            if (newMessages.length > 0) {
-              const merged = [...prev, ...newMessages].sort(
-                (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-              );
-              return merged;
-            }
-            return prev;
-          });
-        }
-        break;
-
-      case 'message-deleted':
-        // Remove deleted message from local state
-        setMessages(prev => prev.filter(m => m.id !== data.id));
-        break;
-    }
-  };
+  }, [myProfile.name, myProfile.avatar, userType]);
 
   const sendTyping = (isTyping: boolean) => {
     sendSignal({ type: 'typing', isTyping });
@@ -558,35 +658,37 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   };
 
   const sendMessage = (msg: Partial<Message>) => {
+    const now = new Date();
     const newMsg: Message = {
       id: Date.now().toString(),
-      text: msg.text || "",
+      text: msg.text || '',
       sender: 'me',
-      timestamp: new Date(),
+      timestamp: now,
       type: msg.type || 'text',
       mediaUrl: msg.mediaUrl,
       senderName: myProfile.name,
-      status: peerConnected ? 'delivered' : 'sending',
+      // Start as "sending" until server confirms queued/delivered
+      status: 'sending',
       replyTo: msg.replyTo
     };
 
-    setMessages(prev => [...prev, newMsg]);
+    setMessages((prev) => [...prev, newMsg]);
     sendTyping(false);
-    
+
     sendSignal({
       type: 'chat-message',
       id: newMsg.id,
       text: newMsg.text,
       messageType: newMsg.type,
       mediaUrl: newMsg.mediaUrl,
-      timestamp: newMsg.timestamp.toISOString(),
+      timestamp: now.toISOString(),
       senderName: myProfile.name,
       replyTo: newMsg.replyTo
     });
 
     return newMsg;
   };
-  
+
   const emergencyWipe = useCallback(() => {
     sendSignal({ type: 'emergency-wipe' });
     setMessages([]);
@@ -594,14 +696,17 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   }, [sendSignal, userType]);
 
   const deleteMessage = useCallback((msgId: string) => {
-    setMessages(prev => prev.filter(m => m.id !== msgId));
+    setMessages((prev) => prev.filter((m) => m.id !== msgId));
   }, []);
 
-  const deleteMessages = useCallback((msgIds: string[]) => {
-    const idSet = new Set(msgIds);
-    setMessages(prev => prev.filter(m => !idSet.has(m.id)));
-    msgIds.forEach(id => sendSignal({ type: 'message-delete', id }));
-  }, [sendSignal]);
+  const deleteMessages = useCallback(
+    (msgIds: string[]) => {
+      const idSet = new Set(msgIds);
+      setMessages((prev) => prev.filter((m) => !idSet.has(m.id)));
+      msgIds.forEach((id) => sendSignal({ type: 'message-delete', id }));
+    },
+    [sendSignal]
+  );
 
   const getMediaConstraints = (mode: 'voice' | 'video') => {
     return {
@@ -614,18 +719,21 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         latency: { ideal: 0.01 },
         suppressLocalAudioPlayback: true
       },
-      video: mode === 'video' ? {
-        width: { ideal: 1280, max: 1920 },
-        height: { ideal: 720, max: 1080 },
-        frameRate: { ideal: 30, max: 30 },
-        facingMode: 'user'
-      } : false
+      video:
+        mode === 'video'
+          ? {
+              width: { ideal: 1280, max: 1920 },
+              height: { ideal: 720, max: 1080 },
+              frameRate: { ideal: 30, max: 30 },
+              facingMode: 'user'
+            }
+          : false
     };
   };
 
   const startCall = async (mode: 'voice' | 'video') => {
     if (!peerConnected) {
-      toast({ variant: "destructive", title: "Friend not online" });
+      toast({ variant: 'destructive', title: 'Friend not online' });
       return;
     }
     currentCallType.current = mode;
@@ -656,35 +764,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     cleanupCall();
   };
 
-  const initiateWebRTC = async (mode: 'voice' | 'video') => {
-    try {
-      const constraints = getMediaConstraints(mode);
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      
-      setLocalStream(stream);
-      localStreamRef.current = stream;
-
-      const peer = createPeerConnection(stream);
-      peerRef.current = peer;
-
-      const offer = await peer.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: mode === 'video'
-      });
-      await peer.setLocalDescription(offer);
-      sendSignal({ type: 'offer', sdp: offer });
-      setCallStatus('connected');
-    } catch (err) {
-      console.error('Media error:', err);
-      toast({ variant: "destructive", title: "Could not access camera/microphone" });
-      cleanupCall();
-    }
-  };
-
   const createPeerConnection = (stream: MediaStream) => {
     const peer = new RTCPeerConnection(ICE_SERVERS);
-    
-    stream.getTracks().forEach(track => {
+
+    stream.getTracks().forEach((track) => {
       peer.addTrack(track, stream);
     });
 
@@ -702,27 +785,55 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     };
 
     peer.ontrack = (event) => {
-      console.log('Received remote track:', event.track.kind);
       if (event.streams && event.streams[0]) {
         setRemoteStream(event.streams[0]);
       }
     };
 
     peer.oniceconnectionstatechange = () => {
-      console.log('ICE state:', peer.iceConnectionState);
       if (peer.iceConnectionState === 'connected') {
         setCallStatus('connected');
-      } else if (peer.iceConnectionState === 'disconnected' || peer.iceConnectionState === 'failed') {
-        toast({ title: "Call connection lost", variant: "destructive" });
+      } else if (
+        peer.iceConnectionState === 'disconnected' ||
+        peer.iceConnectionState === 'failed'
+      ) {
+        toast({
+          title: 'Call connection lost',
+          variant: 'destructive'
+        });
         cleanupCall();
       }
     };
 
-    peer.onconnectionstatechange = () => {
-      console.log('Connection state:', peer.connectionState);
-    };
-
     return peer;
+  };
+
+  const initiateWebRTC = async (mode: 'voice' | 'video') => {
+    try {
+      const constraints = getMediaConstraints(mode);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      setLocalStream(stream);
+      localStreamRef.current = stream;
+
+      const peer = createPeerConnection(stream);
+      peerRef.current = peer;
+
+      const offer = await peer.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: mode === 'video'
+      });
+      await peer.setLocalDescription(offer);
+      sendSignal({ type: 'offer', sdp: offer });
+      setCallStatus('connected');
+    } catch (err) {
+      console.error('Media error:', err);
+      toast({
+        variant: 'destructive',
+        title: 'Could not access camera/microphone'
+      });
+      cleanupCall();
+    }
   };
 
   const handleOffer = async (sdp: RTCSessionDescriptionInit) => {
@@ -730,7 +841,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       const mode = currentCallType.current || 'voice';
       const constraints = getMediaConstraints(mode);
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      
+
       setLocalStream(stream);
       localStreamRef.current = stream;
 
@@ -738,7 +849,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       peerRef.current = peer;
 
       await peer.setRemoteDescription(new RTCSessionDescription(sdp));
-      
+
       for (const candidate of pendingCandidates.current) {
         try {
           await peer.addIceCandidate(new RTCIceCandidate(candidate));
@@ -754,7 +865,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       setCallStatus('connected');
     } catch (e) {
       console.error('Error handling offer:', e);
-      toast({ variant: "destructive", title: "Failed to connect call" });
+      toast({ variant: 'destructive', title: 'Failed to connect call' });
       cleanupCall();
     }
   };
@@ -762,8 +873,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const handleAnswer = async (sdp: RTCSessionDescriptionInit) => {
     if (!peerRef.current) return;
     try {
-      await peerRef.current.setRemoteDescription(new RTCSessionDescription(sdp));
-      
+      await peerRef.current.setRemoteDescription(
+        new RTCSessionDescription(sdp)
+      );
+
       for (const candidate of pendingCandidates.current) {
         try {
           await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
@@ -779,7 +892,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
   const handleIceCandidate = async (candidate: RTCIceCandidateInit) => {
     if (!candidate) return;
-    
+
     if (peerRef.current?.remoteDescription) {
       try {
         await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
@@ -793,16 +906,16 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
   const cleanupCall = useCallback(() => {
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => {
+      localStreamRef.current.getTracks().forEach((track) => {
         track.stop();
       });
     }
-    
+
     if (peerRef.current) {
       peerRef.current.close();
       peerRef.current = null;
     }
-    
+
     setLocalStream(null);
     setRemoteStream(null);
     setActiveCall(null);
@@ -817,26 +930,26 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const toggleMute = () => {
     if (localStreamRef.current) {
       const audioTracks = localStreamRef.current.getAudioTracks();
-      audioTracks.forEach(track => {
+      audioTracks.forEach((track) => {
         track.enabled = !track.enabled;
       });
-      setIsMuted(!isMuted);
+      setIsMuted((prev) => !prev);
     }
   };
 
   const toggleVideo = () => {
     if (localStreamRef.current) {
       const videoTracks = localStreamRef.current.getVideoTracks();
-      videoTracks.forEach(track => {
+      videoTracks.forEach((track) => {
         track.enabled = !track.enabled;
       });
-      setIsVideoOff(!isVideoOff);
+      setIsVideoOff((prev) => !prev);
     }
   };
 
   const clearMessages = () => {
     setMessages([]);
-    localStorage.removeItem('chat_messages');
+    localStorage.removeItem(`chat_messages_${userType}`);
     sendSignal({ type: 'emergency-wipe' });
   };
 
