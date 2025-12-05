@@ -2,7 +2,11 @@
   "name": "rest-express",
   "version": "1.0.0",
   "type": "module",
-  "license": "MIT",
+
+  "engines": {
+    "node": "20.x"
+  },
+
   "scripts": {
     "dev:client": "vite dev --port 5000",
     "dev": "tsx server/index.ts",
@@ -11,6 +15,7 @@
     "check": "tsc",
     "db:push": "drizzle-kit push"
   },
+
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
@@ -79,6 +84,7 @@
     "zod": "^3.25.76",
     "zod-validation-error": "^3.4.0"
   },
+
   "devDependencies": {
     "@replit/vite-plugin-cartographer": "^0.4.4",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
@@ -98,13 +104,13 @@
     "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
     "drizzle-kit": "^0.31.7",
-    "esbuild": "^0.25.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.20.5",
     "typescript": "5.6.3",
     "vite": "^7.1.9"
   },
+
   "optionalDependencies": {
     "bufferutil": "^4.0.8"
   }

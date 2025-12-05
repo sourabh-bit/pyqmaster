@@ -449,6 +449,51 @@ export async function registerRoutes(
     res.json({ success: true });
   });
 
+  // Fetch chat history from database
+  app.get('/api/messages/:roomId', async (req, res) => {
+    const { roomId } = req.params;
+    const { userType } = req.query;
+
+    if (!userType || (userType !== 'admin' && userType !== 'friend')) {
+      return res.status(400).json({ error: 'Invalid userType' });
+    }
+
+    if (!hasDatabase || !db) {
+      return res.json({ messages: [] });
+    }
+
+    try {
+      const dbMessages = await db.query.messages.findMany({
+        where: and(
+          eq(schema.messages.roomId, roomId),
+          eq(schema.messages.isDeleted, false)
+        ),
+        orderBy: schema.messages.timestamp,
+      });
+
+      const userId = userType === 'admin' ? adminUserId : friendUserId;
+
+      const formattedMessages = dbMessages.map((msg: any) => {
+        const isSender = msg.senderId === userId;
+        return {
+          id: msg.id,
+          text: msg.text,
+          sender: isSender ? 'me' : 'them',
+          timestamp: msg.timestamp.getTime(),
+          type: msg.messageType,
+          mediaUrl: msg.mediaUrl,
+          senderName: msg.senderId === adminUserId ? 'Admin' : 'Friend',
+          status: msg.delivered ? 'delivered' : 'sent',
+        };
+      });
+
+      res.json({ messages: formattedMessages });
+    } catch (error) {
+      console.error('Failed to fetch messages:', error);
+      res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+  });
+
   // Message retention settings API
   app.get('/api/retention/:roomId', async (req, res) => {
     if (!hasDatabase) {
