@@ -275,6 +275,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const currentCallType = useRef<'voice' | 'video' | null>(null);
   const processedMessageIds = useRef<Set<string>>(new Set());
   const isDocumentVisible = useRef<boolean>(!document.hidden);
+  const offlineQueue = useRef<any[]>([]);
 
   const deviceId = useRef<string>(
     localStorage.getItem('device_id') ||
@@ -362,14 +363,21 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     return `${protocol}//${window.location.host}/ws`;
   };
 
-  const sendSignal = useCallback((data: any) => {
+  const sendSignal = useCallback((data: any, queueIfOffline = false) => {
+    const payload = { ...data, roomId: FIXED_ROOM_ID };
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          ...data,
-          roomId: FIXED_ROOM_ID
-        })
-      );
+      wsRef.current.send(JSON.stringify(payload));
+    } else if (queueIfOffline) {
+      offlineQueue.current.push(payload);
+    }
+  }, []);
+
+  const flushOfflineQueue = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN && offlineQueue.current.length > 0) {
+      offlineQueue.current.forEach((payload) => {
+        wsRef.current!.send(JSON.stringify(payload));
+      });
+      offlineQueue.current = [];
     }
   }, []);
 
@@ -882,6 +890,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
+      flushOfflineQueue();
     };
 
     ws.onmessage = async (event) => {
@@ -909,7 +918,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       }
       reconnectTimeoutRef.current = setTimeout(connect, 3000);
     };
-  }, [userType, handleMessage]);
+  }, [userType, handleMessage, flushOfflineQueue]);
 
   const sendTyping = useCallback((isTyping: boolean) => {
     sendSignal({ type: 'typing', isTyping });
@@ -948,7 +957,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       timestamp: now.toISOString(),
       senderName: myProfileRef.current.name,
       replyTo: newMsg.replyTo
-    });
+    }, true);
 
     return newMsg;
   }, [sendSignal, sendTyping]);
