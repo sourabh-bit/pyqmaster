@@ -259,6 +259,7 @@ export default memo(function ChatMessage({
         {msg.type === "image" && msg.mediaUrl && (
           <img
             src={msg.mediaUrl}
+            alt="Shared image"
             className="rounded-xl max-h-72 w-full object-cover mt-1 cursor-pointer"
             onClick={handleMediaClick}
             draggable={false}

@@ -386,6 +386,77 @@ export async function registerRoutes(
   app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   });
+
+  // Media upload route using Cloudinary
+  app.post('/api/upload', async (req, res) => {
+    try {
+      const { data, type } = req.body;
+      
+      if (!data) {
+        return res.status(400).json({ success: false, error: 'No data provided' });
+      }
+
+      if (!hasCloudinary) {
+        return res.status(500).json({ 
+          success: false, 
+          error: 'Cloudinary not configured. Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET environment variables.' 
+        });
+      }
+
+      // Validate file type from base64 data
+      const mimeMatch = data.match(/^data:(image|video|audio)\/([\w+-]+);base64,/);
+      if (!mimeMatch) {
+        return res.status(400).json({ success: false, error: 'Invalid file format' });
+      }
+
+      const mediaCategory = mimeMatch[1]; // 'image', 'video', or 'audio'
+      const mimeType = mimeMatch[2];
+
+      // Validate allowed types
+      const allowedImageTypes = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
+      const allowedVideoTypes = ['mp4', 'mov', 'webm', 'quicktime', 'mpeg'];
+      const allowedAudioTypes = ['webm', 'mp3', 'wav', 'ogg', 'mpeg'];
+
+      let resourceType: 'image' | 'video' | 'raw' = 'image';
+      
+      if (mediaCategory === 'image') {
+        if (!allowedImageTypes.includes(mimeType.toLowerCase())) {
+          return res.status(400).json({ success: false, error: `Image type ${mimeType} not allowed` });
+        }
+        resourceType = 'image';
+      } else if (mediaCategory === 'video') {
+        if (!allowedVideoTypes.includes(mimeType.toLowerCase())) {
+          return res.status(400).json({ success: false, error: `Video type ${mimeType} not allowed` });
+        }
+        resourceType = 'video';
+      } else if (mediaCategory === 'audio') {
+        if (!allowedAudioTypes.includes(mimeType.toLowerCase())) {
+          return res.status(400).json({ success: false, error: `Audio type ${mimeType} not allowed` });
+        }
+        resourceType = 'video'; // Cloudinary treats audio as video resource type
+      }
+
+      // Check file size (approximate from base64 - base64 is ~1.37x larger than binary)
+      const base64Data = data.split(',')[1];
+      const fileSizeBytes = Math.ceil((base64Data.length * 3) / 4);
+      const maxSizeBytes = 20 * 1024 * 1024; // 20MB limit
+
+      if (fileSizeBytes > maxSizeBytes) {
+        return res.status(400).json({ success: false, error: 'File size exceeds 20MB limit' });
+      }
+
+      const mediaUrl = await uploadToCloudinary(data, resourceType);
+      
+      if (!mediaUrl) {
+        return res.status(500).json({ success: false, error: 'Failed to upload to Cloudinary' });
+      }
+
+      res.json({ success: true, mediaUrl });
+    } catch (error) {
+      console.error('Upload error:', error);
+      res.status(500).json({ success: false, error: 'Internal server error during upload' });
+    }
+  });
   
   app.get('/api/auth/passwords', (req, res) => {
     res.json({
