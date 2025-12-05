@@ -604,10 +604,12 @@ export async function registerRoutes(
                   messageIds.push(msg.id);
                 }
 
-                // Mark messages as delivered in database
-                await db.update(schema.messages)
-                  .set({ delivered: true })
-                  .where(eq(schema.messages.receiverId, myUserId));
+                // Mark only these pending messages as delivered in database
+                for (const msgId of messageIds) {
+                  await db.update(schema.messages)
+                    .set({ delivered: true })
+                    .where(eq(schema.messages.id, msgId));
+                }
 
                 // Notify sender(s) that messages were delivered
                 const senderType = myUserType === 'admin' ? 'friend' : 'admin';
@@ -768,19 +770,21 @@ export async function registerRoutes(
                 sendPushNotification('admin', `💬 ${data.senderName || 'Friend'}`, msgPreview);
               }
 
-              // Store pending message for offline user
-              const pendingKey = `${currentRoom}_${myUserType === 'admin' ? 'friend' : 'admin'}`;
-              const pending = pendingMessages.get(pendingKey) || [];
-              pending.push({
-                id: data.id,
-                text: data.text,
-                messageType: data.messageType || 'text',
-                mediaUrl: data.mediaUrl,
-                timestamp: Date.now(),
-                senderName: data.senderName || myProfile?.name || 'Unknown',
-                status: 'sent'
-              });
-              pendingMessages.set(pendingKey, pending);
+              // Store pending message for offline user (only if no database)
+              if (!hasDatabase) {
+                const pendingKey = `${currentRoom}_${myUserType === 'admin' ? 'friend' : 'admin'}`;
+                const pending = pendingMessages.get(pendingKey) || [];
+                pending.push({
+                  id: data.id,
+                  text: data.text,
+                  messageType: data.messageType || 'text',
+                  mediaUrl: data.mediaUrl,
+                  timestamp: Date.now(),
+                  senderName: data.senderName || myProfile?.name || 'Unknown',
+                  status: 'sent'
+                });
+                pendingMessages.set(pendingKey, pending);
+              }
 
               ws.send(JSON.stringify({
                 type: "message-queued",
