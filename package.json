@@ -7,13 +7,12 @@
   },
 "scripts": {
   "dev": "tsx server/index.ts",
-
   "build": "npm run build:client && npm run build:server",
-  "build:client": "cd client && npm run build",
+  "build:client": "cd client && npm install && vite build",
   "build:server": "tsx script/build.ts",
-
   "start": "node dist/index.cjs"
 }
+
 ,
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

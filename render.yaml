@@ -5,11 +5,7 @@ services:
     plan: free
     autoDeploy: true
 
-    buildCommand: |
-      npm install
-      npm install tsx --save-dev
-      cd client && npm install && npm run build
-      cd .. && npm run build:server
+    buildCommand: npm install && npm run build
 
     startCommand: "node dist/index.cjs"
     headers:
@@ -19,13 +15,9 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-
+      - key: NODE_VERSION
+        value: "20"
       - key: DATABASE_URL
-        value: postgresql://neondb_owner:npg_YFt0nV6xBjUJ@ep-patient-dawn-a1bczy22-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
-
+        sync: false
       - key: SESSION_SECRET
-        value: 8f3b4d9e27ac1fbf6d8c29e45a7c0b12dfe9834a76b1cd9023af58c41e7d29f4
-
-databases:
-  - name: pyqmaster-db
-    plan: free
+        sync: false
