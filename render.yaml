@@ -6,7 +6,7 @@ services:
 
     # 👇 Correct build steps for your project structure
     buildCommand: |
-      npm install
+      npm install --include=dev
       npm run build
 
     startCommand: "npm start"
