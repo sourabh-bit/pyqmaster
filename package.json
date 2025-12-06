@@ -8,8 +8,8 @@
 "scripts": {
   "dev": "tsx server/index.ts",
   "build": "npm run build:client && npm run build:server",
-  "build:client": "vite build",
-  "build:server": "tsx script/build.ts",
+  "build:client": "npx vite build",
+  "build:server": "npx tsx script/build.ts",
   "start": "node dist/index.cjs"
 }
 
