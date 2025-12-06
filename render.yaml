@@ -4,7 +4,8 @@ services:
     env: node
     plan: free
 
-    buildCommand: "npm install && npm run build"
+    # FIX: install devDependencies so Vite is available
+    buildCommand: "npm install --include=dev && npm run build"
     startCommand: "npm start"
     autoDeploy: true
 
