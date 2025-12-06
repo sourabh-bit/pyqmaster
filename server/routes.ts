@@ -740,14 +740,68 @@ export async function registerRoutes(
     }
   });
 
-  // -------- UPLOAD (DISABLED CLOUDINARY) --------
+  // -------- UPLOAD (CLOUDINARY) --------
 
   app.post("/api/upload", async (req, res) => {
-    return res.status(503).json({
-      success: false,
-      error:
-        "Media upload is disabled (Cloudinary not configured in this build).",
-    });
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+    const apiKey = process.env.CLOUDINARY_API_KEY;
+    const apiSecret = process.env.CLOUDINARY_API_SECRET;
+
+    if (!cloudName || !apiKey || !apiSecret) {
+      return res.status(503).json({
+        success: false,
+        error: "Media upload is disabled (Cloudinary not configured).",
+      });
+    }
+
+    try {
+      const { data, type } = req.body;
+
+      if (!data || typeof data !== "string") {
+        return res.status(400).json({ success: false, error: "No data provided" });
+      }
+
+      // Generate signature for signed upload
+      const timestamp = Math.floor(Date.now() / 1000);
+      const folder = "pyqmaster";
+      const resourceType = type === "video" ? "video" : type === "audio" ? "video" : "image";
+
+      // Create signature string
+      const signatureString = `folder=${folder}&timestamp=${timestamp}${apiSecret}`;
+      const crypto = await import("crypto");
+      const signature = crypto.createHash("sha1").update(signatureString).digest("hex");
+
+      // Upload to Cloudinary
+      const formData = new URLSearchParams();
+      formData.append("file", data);
+      formData.append("api_key", apiKey);
+      formData.append("timestamp", timestamp.toString());
+      formData.append("signature", signature);
+      formData.append("folder", folder);
+
+      const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
+
+      const uploadResponse = await fetch(uploadUrl, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!uploadResponse.ok) {
+        const errorText = await uploadResponse.text();
+        console.error("Cloudinary upload failed:", errorText);
+        return res.status(500).json({ success: false, error: "Upload failed" });
+      }
+
+      const result = await uploadResponse.json();
+
+      return res.json({
+        success: true,
+        mediaUrl: result.secure_url,
+      });
+    } catch (error) {
+      console.error("Upload error:", error);
+      return res.status(500).json({ success: false, error: "Upload failed" });
+    }
   });
 
   // -------- PUSH (STUBBED – NO REAL NOTIFICATIONS) --------
