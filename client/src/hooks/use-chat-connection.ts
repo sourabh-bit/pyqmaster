@@ -9,7 +9,7 @@ interface Message {
   type: 'text' | 'image' | 'video' | 'audio';
   mediaUrl?: string;
   senderName?: string;
-  status?: 'sent' | 'delivered' | 'read';
+  status?: 'sending' | 'sent' | 'delivered' | 'read';
   replyTo?: {
     id: string;
     text: string;
@@ -921,6 +921,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         if (!Array.isArray(data.ids) || !data.status) break;
 
         const statusPriority: Record<string, number> = {
+          'sending': 0,
           'sent': 1,
           'delivered': 2,
           'read': 3
@@ -931,9 +932,9 @@ export function useChatConnection(userType: 'admin' | 'friend') {
           prev.map(m => {
             if (!data.ids.includes(m.id)) return m;
 
-            const currentPriority = statusPriority[m.status || 'sent'] ?? 1;
-            // Only update if new status is higher priority (don't go backwards)
-            if (newStatusPriority > currentPriority) {
+            const currentPriority = statusPriority[m.status || 'sending'] ?? 0;
+            // Update if new status is higher or equal priority (ensure status is set)
+            if (newStatusPriority >= currentPriority) {
               return { ...m, status: data.status as 'sent' | 'delivered' | 'read' };
             }
             return m;
