@@ -3,15 +3,15 @@ services:
     name: pyqmaster
     env: node
     plan: free
-
-    # 👇 Correct build steps for your project structure
-    buildCommand: |
-      npm install --include=dev
-      npm run build
-
-    startCommand: "npm start"
     autoDeploy: true
 
+    buildCommand: |
+      npm install
+      npm install tsx --save-dev
+      cd client && npm install && npm run build
+      cd .. && npm run build:server
+
+    startCommand: "node dist/index.cjs"
     headers:
       - key: Connection
         value: keep-alive
