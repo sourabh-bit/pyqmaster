@@ -61,37 +61,39 @@
   <body>
     <div id="root"></div>
 
-    <!-- Simple versioning + auto-update logic (PRODUCTION ONLY) -->
+    <!-- One-time cleanup for old buggy service worker -->
     <script>
       (function () {
-        // 🔢 Change this when you deploy a new version
-        var APP_VERSION = "1.0.0";
-
-        // Disable auto-reload in development
-        var isDevelopment =
-          window.location.hostname === "localhost" ||
-          window.location.hostname === "127.0.0.1" ||
-          window.location.port === "5000" ||
-          window.location.port === "5173";
-
-        var KEY = "app_version";
-        var stored = localStorage.getItem(KEY);
-
-        if (!stored) {
-          // First load on this device
-          localStorage.setItem(KEY, APP_VERSION);
-        } else if (stored !== APP_VERSION && !isDevelopment) {
-          // New version deployed -> update stored version and hard reload once (PRODUCTION ONLY)
-          localStorage.setItem(KEY, APP_VERSION);
-          // Force reload to get fresh JS/CSS instead of cached bundle
-          window.location.reload();
-        } else if (isDevelopment) {
-          // In development, just update the stored version without reloading
-          localStorage.setItem(KEY, APP_VERSION);
+        var CLEANUP_VERSION = "2";
+        var cleanupDone = localStorage.getItem("sw_cleanup_v");
+        var forceClean = window.location.search.indexOf("clearCache") > -1;
+        
+        if ((cleanupDone !== CLEANUP_VERSION || forceClean) && "serviceWorker" in navigator) {
+          // Unregister all service workers
+          navigator.serviceWorker.getRegistrations().then(function(registrations) {
+            registrations.forEach(function(registration) {
+              registration.unregister();
+            });
+          });
+          
+          // Clear all caches
+          if ("caches" in window) {
+            caches.keys().then(function(names) {
+              names.forEach(function(name) {
+                caches.delete(name);
+              });
+            });
+          }
+          
+          localStorage.setItem("sw_cleanup_v", CLEANUP_VERSION);
+          
+          // Remove clearCache param and reload clean
+          if (forceClean) {
+            window.history.replaceState({}, "", "/");
+          }
         }
-
-        // Expose if you ever want to read it inside the app
-        window.__APP_VERSION__ = APP_VERSION;
+        
+        window.__APP_VERSION__ = "1.0.2";
       })();
     </script>
 

@@ -258,6 +258,38 @@ async function getUnsyncedMessages(
   }
 }
 
+// Helper to get message status including read receipts
+async function getMessageStatus(
+  msg: any,
+  viewerUserId: string,
+  peerUserId: string
+): Promise<"sent" | "delivered" | "read"> {
+  if (!hasDatabase || !db) {
+    return msg.delivered ? "delivered" : "sent";
+  }
+
+  const isSender = msg.senderId === viewerUserId;
+
+  try {
+    // Check if the relevant party has read it
+    const targetUserId = isSender ? peerUserId : viewerUserId;
+    const readReceipt = await db.query.messageReads.findFirst({
+      where: and(
+        eq(schema.messageReads.messageId, msg.id),
+        eq(schema.messageReads.userId, targetUserId)
+      ),
+    });
+
+    if (readReceipt) {
+      return "read";
+    }
+  } catch (err) {
+    console.error("Failed to check read status:", err);
+  }
+
+  return msg.delivered ? "delivered" : "sent";
+}
+
 // ---------- MAIN REGISTER ROUTES ----------
 
 export async function registerRoutes(
@@ -752,6 +784,8 @@ export async function registerRoutes(
     try {
       const userId =
         userType === "admin" ? adminUserId : friendUserId;
+      const peerId =
+        userType === "admin" ? friendUserId : adminUserId;
 
       const dbMessages = await db.query.messages.findMany({
         where: and(
@@ -779,6 +813,24 @@ export async function registerRoutes(
         replyMessages.map((r: any) => [r.id, r])
       );
 
+      // Fetch all read receipts for messages in this room
+      const messageIds = dbMessages.map((msg: any) => msg.id);
+      const readReceipts =
+        messageIds.length > 0
+          ? await db.query.messageReads.findMany({
+              where: inArray(schema.messageReads.messageId, messageIds),
+            })
+          : [];
+
+      // Build a map: messageId -> Set of userIds who read it
+      const readByMap = new Map<string, Set<string>>();
+      for (const receipt of readReceipts) {
+        if (!readByMap.has(receipt.messageId)) {
+          readByMap.set(receipt.messageId, new Set());
+        }
+        readByMap.get(receipt.messageId)!.add(receipt.userId);
+      }
+
       const formatted = dbMessages.map((msg: any) => {
         const isSender = msg.senderId === userId;
         const replyTo =
@@ -793,8 +845,27 @@ export async function registerRoutes(
               })()
             : undefined;
 
-        const status: "sent" | "delivered" =
-          msg.delivered ? "delivered" : "sent";
+        // Determine status: read > delivered > sent
+        // For my messages: "read" if peer has read it
+        // For their messages: "read" if I have read it
+        let status: "sent" | "delivered" | "read" = "sent";
+        const readers = readByMap.get(msg.id);
+
+        if (isSender) {
+          // My message: check if peer read it
+          if (readers?.has(peerId)) {
+            status = "read";
+          } else if (msg.delivered) {
+            status = "delivered";
+          }
+        } else {
+          // Their message: check if I read it
+          if (readers?.has(userId)) {
+            status = "read";
+          } else if (msg.delivered) {
+            status = "delivered";
+          }
+        }
 
         return {
           id: msg.id,
@@ -1028,9 +1099,7 @@ export async function registerRoutes(
 
                 for (const msg of unsynced) {
                   const isSender = msg.senderId === myUserId;
-                  const status: "sent" | "delivered" = msg.delivered
-                    ? "delivered"
-                    : "sent";
+                  const status = await getMessageStatus(msg, myUserId, peerUserId);
 
                   ws.send(
                     JSON.stringify({

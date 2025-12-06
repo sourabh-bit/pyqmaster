@@ -1,24 +1,11 @@
-// Service Worker for PWA and Push Notifications
-// Version is updated on each build via build script
-const CACHE_NAME = 'secure-chat-v5';
-const OFFLINE_URL = '/';
-const VERSION_CHECK_INTERVAL = 60000; // Check every minute
+// Service Worker for PWA - Minimal version to prevent reload loops
+const CACHE_NAME = 'secure-chat-v6';
 
-// Assets to cache for offline
-const CACHE_ASSETS = [
-  '/',
-  '/favicon.png',
-  '/manifest.json'
-];
-
-// Install event - cache assets
+// Install event - don't skipWaiting to prevent reload loops
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(CACHE_ASSETS);
-    }).then(() => {
-      // Force activation of new service worker
-      return self.skipWaiting();
+      return cache.addAll(['/favicon.png', '/manifest.json']);
     })
   );
 });
@@ -32,42 +19,24 @@ self.addEventListener('activate', (event) => {
           .filter((name) => name !== CACHE_NAME)
           .map((name) => caches.delete(name))
       );
-    }).then(() => {
-      // Take control of all clients immediately
-      return self.clients.claim();
     })
   );
 });
 
-// Fetch event - network first for HTML/JS/CSS, cache first for static assets
+// Fetch event - network first, no aggressive caching for HTML/JS
 self.addEventListener('fetch', (event) => {
   // Skip non-GET requests
   if (event.request.method !== 'GET') return;
   
-  // Skip API and WebSocket requests
+  // Skip API and WebSocket requests entirely
   if (event.request.url.includes('/api/') || event.request.url.includes('/ws')) return;
   
-  const url = new URL(event.request.url);
-  const isNavigate = event.request.mode === 'navigate';
-  const isAsset = url.pathname.match(/\.(js|css|html)$/) || isNavigate;
+  // Skip navigation requests - let browser handle them directly
+  if (event.request.mode === 'navigate') return;
   
-  if (isAsset) {
-    // Network first for HTML/JS/CSS - always get fresh content
-    event.respondWith(
-      fetch(event.request).then((fetchResponse) => {
-        if (fetchResponse.status === 200) {
-          const responseClone = fetchResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone);
-          });
-        }
-        return fetchResponse;
-      }).catch(() => {
-        return caches.match(event.request) || caches.match(OFFLINE_URL);
-      })
-    );
-  } else {
-    // Cache first for static assets (images, fonts, etc.)
+  // Only cache static assets like images
+  const url = new URL(event.request.url);
+  if (url.pathname.match(/\.(png|jpg|jpeg|gif|svg|ico)$/)) {
     event.respondWith(
       caches.match(event.request).then((response) => {
         return response || fetch(event.request).then((fetchResponse) => {
@@ -79,8 +48,6 @@ self.addEventListener('fetch', (event) => {
           }
           return fetchResponse;
         });
-      }).catch(() => {
-        return caches.match(OFFLINE_URL);
       })
     );
   }
