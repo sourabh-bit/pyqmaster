@@ -365,42 +365,55 @@ export function ChatLayout({
     try {
       const mediaType = file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'image';
       
-      let base64Data: string;
+      let fileToUpload: File | Blob = file;
       
-      const readFileAsBase64 = (): Promise<string> => {
-        return new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-      };
-      
+      // Compress large images
       if (mediaType === 'image' && file.size > 500 * 1024) {
         try {
-          base64Data = await compressImage(file);
-          console.log(`[UPLOAD] Compressed image from ${Math.round(file.size/1024)}KB to ${Math.round(base64Data.length/1024)}KB`);
+          const compressedBase64 = await compressImage(file);
+          const response = await fetch(compressedBase64);
+          fileToUpload = await response.blob();
+          console.log(`[UPLOAD] Compressed from ${Math.round(file.size/1024)}KB to ${Math.round(fileToUpload.size/1024)}KB`);
         } catch (compressError) {
           console.warn('[UPLOAD] Compression failed, using original:', compressError);
-          base64Data = await readFileAsBase64();
         }
-      } else {
-        base64Data = await readFileAsBase64();
       }
       
-      const response = await fetch('/api/upload', {
+      // Get upload config from server
+      const configResponse = await fetch('/api/upload/config');
+      if (!configResponse.ok) {
+        throw new Error('Could not get upload config');
+      }
+      const config = await configResponse.json();
+      
+      if (!config.cloudName) {
+        throw new Error('Upload not configured');
+      }
+      
+      // Direct upload to Cloudinary
+      const formData = new FormData();
+      formData.append('file', fileToUpload);
+      formData.append('api_key', config.apiKey);
+      formData.append('timestamp', config.timestamp);
+      formData.append('signature', config.signature);
+      formData.append('folder', 'pyqmaster');
+      
+      const resourceType = mediaType === 'video' || mediaType === 'audio' ? 'video' : 'image';
+      const uploadUrl = `https://api.cloudinary.com/v1_1/${config.cloudName}/${resourceType}/upload`;
+      
+      const uploadResponse = await fetch(uploadUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ data: base64Data, type: mediaType }),
+        body: formData,
       });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Upload failed');
+      if (!uploadResponse.ok) {
+        const errorText = await uploadResponse.text();
+        console.error('Cloudinary error:', errorText);
+        throw new Error('Upload failed');
       }
 
-      const result = await response.json();
-      return result.mediaUrl;
+      const result = await uploadResponse.json();
+      return result.secure_url;
     } catch (error) {
       console.error('Upload error:', error);
       toast({ variant: 'destructive', title: 'Failed to upload media' });
