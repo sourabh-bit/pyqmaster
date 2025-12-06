@@ -8,6 +8,8 @@ export const users = pgTable("users", {
   id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
   username: text("username").notNull().unique(), // 'admin' or 'friend'
   password: text("password").notNull(),
+  displayName: text("display_name"), // User's chosen display name
+  avatar: text("avatar"), // Avatar URL or base64
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -39,7 +41,7 @@ export const messages = pgTable("messages", {
   deletedAt: timestamp("deleted_at"),
   deletedById: varchar("deleted_by_id", { length: 36 }).references(() => users.id, { onDelete: 'set null' }),
   expiresAt: timestamp("expires_at"), // For disappearing messages
-  delivered: boolean("delivered").default(false).notNull(), // For offline message delivery
+  delivered: boolean("delivered").default(false).notNull(),
   timestamp: timestamp("timestamp").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

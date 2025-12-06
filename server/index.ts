@@ -1,3 +1,6 @@
+import * as dotenv from "dotenv";
+dotenv.config();
+
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -15,30 +18,35 @@ declare module "http" {
 
 app.use(
   express.json({
-    limit: '50mb',
+    limit: "50mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
-  }),
+  })
 );
 
-app.use(express.urlencoded({ extended: false, limit: '50mb' }));
+app.use(express.urlencoded({ extended: false, limit: "50mb" }));
 
-// CORS for Render deployment
+// ------------------------------
+// GLOBAL CORS (Render Friendly)
+// ------------------------------
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
   }
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     return res.sendStatus(200);
   }
   next();
 });
 
+// ------------------------------
+// LOGGING
+// ------------------------------
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -55,20 +63,17 @@ app.use((req, res, next) => {
   const path = req.path;
   let capturedJsonResponse: Record<string, any> | undefined = undefined;
 
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
+  const originalJson = res.json;
+  res.json = function (body, ...args) {
+    capturedJsonResponse = body;
+    return originalJson.apply(res, [body, ...args]);
   };
 
   res.on("finish", () => {
-    const duration = Date.now() - start;
     if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
-      }
-
+      const ms = Date.now() - start;
+      let logLine = `${req.method} ${path} ${res.statusCode} in ${ms}ms`;
+      if (capturedJsonResponse) logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       log(logLine);
     }
   });
@@ -77,6 +82,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // your routes + websocket setup
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -87,41 +93,33 @@ app.use((req, res, next) => {
     throw err;
   });
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
+  // ------------------------------
+  // PRODUCTION STATIC HANDLING
+  // ------------------------------
   if (process.env.NODE_ENV === "production") {
-    // Serve static files from dist/public
-    app.use(express.static("dist/public"));
+    const staticDir = path.join(process.cwd(), "dist/public");
+    app.use(express.static(staticDir));
 
-    // SPA fallback
+    // React SPA fallback
     app.get("*", (req, res) => {
       res.setHeader("Cache-Control", "no-store, must-revalidate");
-      res.sendFile(path.join(process.cwd(), "dist/public/index.html"));
+      res.sendFile(path.join(staticDir, "index.html"));
     });
   } else {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
+  // ------------------------------
+  // 🚀 RENDER-SAFE SERVER START
+  // ------------------------------
+  const PORT = process.env.PORT ? Number(process.env.PORT) : 5000;
 
-  // Increase timeouts for Render WebSocket stability
-  httpServer.keepAliveTimeout = 65000; // 65 seconds (Render default is 60s)
-  httpServer.headersTimeout = 66000; // 66 seconds (must be > keepAliveTimeout)
+  // WebSocket stability fixes
+  httpServer.keepAliveTimeout = 65000;
+  httpServer.headersTimeout = 66000;
 
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
-
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    log(`Server running on Render port ${PORT}`);
+  });
 })();

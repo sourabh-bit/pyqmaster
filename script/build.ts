@@ -1,14 +1,13 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile } from "fs/promises";
+import { rm, mkdir, cp, readFile } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 
-// server deps to bundle to reduce openat(2) syscalls
-// which helps cold start times
+// server deps to bundle for performance
 const allowlist = [
   "@google/generative-ai",
   "@neondatabase/serverless",
@@ -39,18 +38,27 @@ const allowlist = [
 ];
 
 async function buildAll() {
-  console.log("Removing dist folder...");
+  console.log("🧹 Cleaning dist folder...");
   await rm("dist", { recursive: true, force: true });
 
-  console.log("building client...");
+  console.log("📦 Building client...");
   await viteBuild();
 
-  console.log("building server...");
+  console.log("🚚 Moving client build to dist/public...");
+  const publicDir = path.resolve("dist/public");
+  await mkdir(publicDir, { recursive: true });
+
+  await cp("client/dist", publicDir, { recursive: true })
+    .catch(() => console.warn("⚠ Failed to copy client/dist → dist/public"));
+
+  console.log("🛠 Building server...");
   const pkg = JSON.parse(await readFile("package.json", "utf-8"));
   const allDeps = [
     ...Object.keys(pkg.dependencies || {}),
-    ...Object.keys(pkg.devDependencies || {}),
+    ...Object.keys(pkg.devDependencies || {})
   ];
+
+  // Externals = everything except allowlist
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
 
   const result = await esbuild({
@@ -67,43 +75,38 @@ async function buildAll() {
     logLevel: "info",
     alias: {
       "@shared": path.resolve(rootDir, "shared"),
-    },
+    }
   });
 
-  console.log("Server build result:", result);
+  console.log("✔ Server build complete.");
 
-  // Verify the output file exists
-  const { stat, readdir } = await import("fs/promises");
+  // Check output
   try {
+    const { stat, readdir } = await import("fs/promises");
     const stats = await stat("dist/index.cjs");
-    console.log("dist/index.cjs created, size:", stats.size, "bytes");
 
-    // Print directory structure
-    console.log("\n=== Build Output Structure ===");
+    console.log("📄 dist/index.cjs created, size:", stats.size, "bytes\n");
+
+    console.log("=== Build Output Structure ===");
     const distContents = await readdir("dist", { withFileTypes: true });
     for (const item of distContents) {
       if (item.isDirectory()) {
-        console.log(`dist/${item.name}/`);
-        try {
-          const subContents = await readdir(`dist/${item.name}`);
-          for (const subItem of subContents) {
-            console.log(`  dist/${item.name}/${subItem}`);
-          }
-        } catch (e) {
-          // ignore
-        }
+        console.log(`📁 dist/${item.name}/`);
+        const sub = await readdir(path.join("dist", item.name));
+        sub.forEach((f) => console.log(`   └─ ${f}`));
       } else {
-        console.log(`dist/${item.name}`);
+        console.log(`📄 dist/${item.name}`);
       }
     }
     console.log("=== End Build Output Structure ===\n");
-  } catch (e) {
-    console.error("ERROR: dist/index.js was not created!");
+
+  } catch (err) {
+    console.error("❌ ERROR: dist/index.cjs missing!");
     process.exit(1);
   }
 }
 
 buildAll().catch((err) => {
-  console.error(err);
+  console.error("🔥 Build failed:", err);
   process.exit(1);
 });

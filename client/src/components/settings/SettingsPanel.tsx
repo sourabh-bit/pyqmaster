@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Key, Lock, Eye, EyeOff, Save, Check, RotateCcw, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -15,27 +15,11 @@ export function SettingsPanel({ isOpen, onClose, userType }: SettingsPanelProps)
   const [showPasswords, setShowPasswords] = useState(false);
   const [loading, setLoading] = useState(false);
   
-  const [secretKey, setSecretKey] = useState('');
-  const [myPassword, setMyPassword] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newSecretKey, setNewSecretKey] = useState('');
   const [saved, setSaved] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-
-  // Load passwords from server
-  useEffect(() => {
-    if (isOpen) {
-      fetch('/api/auth/passwords')
-        .then(res => res.json())
-        .then(data => {
-          setSecretKey(data.gatekeeper_key || 'secret');
-          setMyPassword(userType === 'admin' ? data.admin_pass : data.friend_pass);
-        })
-        .catch(() => {
-          setSecretKey('secret');
-          setMyPassword(userType === 'admin' ? 'admin123' : 'friend123');
-        });
-    }
-  }, [isOpen, userType]);
 
   const handleResetApp = () => {
     localStorage.clear();
@@ -44,45 +28,78 @@ export function SettingsPanel({ isOpen, onClose, userType }: SettingsPanelProps)
   };
 
   const handleSave = async () => {
-    if (myPassword.length < 4) {
-      toast({ variant: "destructive", title: "Password must be at least 4 characters" });
+    if (!currentPassword) {
+      toast({ variant: "destructive", title: "Current password is required" });
       return;
     }
 
-    if (secretKey.length < 4) {
-      toast({ variant: "destructive", title: "Secret key must be at least 4 characters" });
+    const hasPasswordChange = newPassword.length > 0;
+    const hasKeyChange = newSecretKey.length > 0;
+
+    if (!hasPasswordChange && !hasKeyChange) {
+      toast({ variant: "destructive", title: "Enter a new password or secret key to change" });
+      return;
+    }
+
+    if (hasPasswordChange && newPassword.length < 4) {
+      toast({ variant: "destructive", title: "New password must be at least 4 characters" });
+      return;
+    }
+
+    if (hasKeyChange && newSecretKey.length < 4) {
+      toast({ variant: "destructive", title: "New secret key must be at least 4 characters" });
       return;
     }
 
     setLoading(true);
+    let success = true;
+
     try {
-      const response = await fetch('/api/auth/passwords', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          gatekeeper_key: secretKey,
-          [userType === 'admin' ? 'admin_pass' : 'friend_pass']: myPassword,
-          current_password: currentPassword
-        })
-      });
-      
-      const result = await response.json();
-      
-      if (!response.ok) {
-        toast({ variant: "destructive", title: result.error || "Failed to save" });
-        return;
+      if (hasPasswordChange) {
+        const response = await fetch('/api/auth/password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userType,
+            currentPassword,
+            newPassword
+          })
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok) {
+          toast({ variant: "destructive", title: result.error || "Failed to change password" });
+          success = false;
+        }
       }
-      
-      // Update local state with confirmed server values
-      if (result.passwords) {
-        setSecretKey(result.passwords.gatekeeper_key);
-        setMyPassword(userType === 'admin' ? result.passwords.admin_pass : result.passwords.friend_pass);
+
+      if (success && hasKeyChange) {
+        const response = await fetch('/api/auth/gatekeeper/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            currentPassword,
+            newKey: newSecretKey
+          })
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok) {
+          toast({ variant: "destructive", title: result.error || "Failed to change secret key" });
+          success = false;
+        }
       }
-      
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      toast({ title: "Password changed! Use the new password to login." });
-      setCurrentPassword('');
+
+      if (success) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+        toast({ title: "Settings saved! Use new credentials to login." });
+        setCurrentPassword('');
+        setNewPassword('');
+        setNewSecretKey('');
+      }
     } catch {
       toast({ variant: "destructive", title: "Failed to save settings" });
     } finally {
@@ -136,7 +153,7 @@ export function SettingsPanel({ isOpen, onClose, userType }: SettingsPanelProps)
 
             <div className="border-t border-border pt-4">
               <div className="flex items-center justify-between mb-4">
-                <span className="text-sm font-medium">Edit Credentials</span>
+                <span className="text-sm font-medium">Change Credentials</span>
                 <button
                   onClick={() => setShowPasswords(!showPasswords)}
                   className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -146,34 +163,34 @@ export function SettingsPanel({ isOpen, onClose, userType }: SettingsPanelProps)
                 </button>
               </div>
 
-              {/* Secret Key */}
+              {/* New Secret Key */}
               <div className="space-y-2 mb-4">
                 <label className="text-sm text-muted-foreground">
-                  Shared Secret Key
+                  New Shared Secret Key
                 </label>
                 <input
                   type={showPasswords ? "text" : "password"}
-                  value={secretKey}
-                  onChange={(e) => setSecretKey(e.target.value)}
+                  value={newSecretKey}
+                  onChange={(e) => setNewSecretKey(e.target.value)}
                   className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50"
-                  placeholder="Shared secret key"
+                  placeholder="Enter new secret key (leave empty to keep current)"
                 />
                 <p className="text-xs text-muted-foreground">
                   This key is shared between you and your partner
                 </p>
               </div>
 
-              {/* Personal Password */}
+              {/* New Personal Password */}
               <div className="space-y-2">
                 <label className="text-sm text-muted-foreground">
-                  Your Password ({userType === 'admin' ? 'Admin' : 'Friend'})
+                  New Password ({userType === 'admin' ? 'Admin' : 'Friend'})
                 </label>
                 <input
                   type={showPasswords ? "text" : "password"}
-                  value={myPassword}
-                  onChange={(e) => setMyPassword(e.target.value)}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
                   className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50"
-                  placeholder="Your personal password"
+                  placeholder="Enter new password (leave empty to keep current)"
                 />
                 <p className="text-xs text-muted-foreground">
                   Only you use this password to login
@@ -186,13 +203,13 @@ export function SettingsPanel({ isOpen, onClose, userType }: SettingsPanelProps)
           <div className="p-4 border-t border-border bg-secondary/30 space-y-3">
             <button
               onClick={handleSave}
-              disabled={!currentPassword}
+              disabled={!currentPassword || loading}
               className={cn(
                 "w-full py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-all",
                 saved 
                   ? "bg-green-500 text-white" 
                   : "bg-primary text-primary-foreground hover:bg-primary/90",
-                !currentPassword && "opacity-50 cursor-not-allowed"
+                (!currentPassword || loading) && "opacity-50 cursor-not-allowed"
               )}
             >
               {saved ? (

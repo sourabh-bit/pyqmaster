@@ -9,7 +9,7 @@ interface Message {
   type: 'text' | 'image' | 'video' | 'audio';
   mediaUrl?: string;
   senderName?: string;
-  status?: 'sending' | 'sent' | 'delivered' | 'read';
+  status?: 'sent' | 'delivered' | 'read';
   replyTo?: {
     id: string;
     text: string;
@@ -25,6 +25,39 @@ interface UserProfile {
 }
 
 const FIXED_ROOM_ID = 'secure-room-001';
+
+// Fetch user profile from server (source of truth)
+const fetchServerProfile = async (userType: 'admin' | 'friend'): Promise<{ name: string; avatar: string } | null> => {
+  try {
+    const response = await fetch(`/api/profile?userType=${userType}`);
+    if (response.ok) {
+      const data = await response.json();
+      console.log(`[PROFILE] Fetched ${userType} profile from server:`, data.name);
+      return { name: data.name, avatar: data.avatar || '' };
+    }
+  } catch (error) {
+    console.error('Failed to fetch profile from server:', error);
+  }
+  return null;
+};
+
+// Save profile to server
+const saveServerProfile = async (userType: 'admin' | 'friend', name: string, avatar: string): Promise<boolean> => {
+  try {
+    const response = await fetch('/api/profile/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userType, name, avatar })
+    });
+    if (response.ok) {
+      console.log(`[PROFILE] Saved ${userType} profile to server: name="${name}"`);
+      return true;
+    }
+  } catch (error) {
+    console.error('Failed to save profile to server:', error);
+  }
+  return false;
+};
 
 const fetchChatHistory = async (userType: 'admin' | 'friend'): Promise<Message[]> => {
   try {
@@ -186,48 +219,26 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
   const [isConnected, setIsConnected] = useState(false);
   const [peerConnected, setPeerConnected] = useState(false);
+  const [isPeerOnline, setIsPeerOnline] = useState(false);
 
-  const defaultPeerName = userType === 'admin' ? 'Friend' : 'Admin';
+  const defaultPeerName = ""; // no fallback name anymore
 
-  const [myProfile, setMyProfile] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem(`chat_my_profile_${userType}`);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return { ...parsed, lastSeen: null, isTyping: false };
-      } catch {
-        localStorage.removeItem(`chat_my_profile_${userType}`);
-      }
-    }
-    return {
-      name: userType === 'admin' ? 'Admin' : 'Friend',
-      avatar: '',
-      lastSeen: null,
-      isTyping: false
-    };
+  // Initialize profiles with defaults - server will update these on mount
+  const [myProfile, setMyProfile] = useState<UserProfile>({
+    name: '',
+    avatar: '',
+    lastSeen: null,
+    isTyping: false
   });
 
-  const [peerProfile, setPeerProfile] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem(`chat_peer_profile_${userType}`);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return {
-          ...parsed,
-          lastSeen: parsed.lastSeen ? new Date(parsed.lastSeen) : null,
-          isTyping: false
-        };
-      } catch {
-        localStorage.removeItem(`chat_peer_profile_${userType}`);
-      }
-    }
-    return {
-      name: defaultPeerName,
-      avatar: '',
-      lastSeen: null,
-      isTyping: false
-    };
+  const [peerProfile, setPeerProfile] = useState<UserProfile>({
+    name: '',
+    avatar: '',
+    lastSeen: null,
+    isTyping: false
   });
+  
+  const [isLoadingProfiles, setIsLoadingProfiles] = useState(true);
 
   useEffect(() => {
     if (userType === 'admin') {
@@ -235,23 +246,52 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     }
   }, [userType]);
 
-  const [messages, setMessages] = useState<Message[]>(() => {
-    const saved = localStorage.getItem(`chat_messages_${userType}`);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.map((m: any) => ({
-            ...m,
-            timestamp: new Date(m.timestamp)
-          }));
-        }
-      } catch {
-        localStorage.removeItem(`chat_messages_${userType}`);
+  // Fetch BOTH own profile AND peer profile from server on mount (source of truth)
+  useEffect(() => {
+    const peerType = userType === 'admin' ? 'friend' : 'admin';
+    
+    const loadProfiles = async () => {
+      console.log(`[CLIENT] Loading profiles for userType=${userType}`);
+      
+      // Fetch own profile
+      const serverProfile = await fetchServerProfile(userType);
+      if (serverProfile) {
+        console.log(`[PROFILE] Loaded own profile (${userType}):`, serverProfile.name);
+        setMyProfile(prev => ({
+          ...prev,
+          name: serverProfile.name,
+          avatar: serverProfile.avatar
+        }));
+        localStorage.setItem(`chat_my_profile_${userType}`, JSON.stringify({
+          name: serverProfile.name,
+          avatar: serverProfile.avatar
+        }));
       }
-    }
-    return [];
-  });
+      
+      // Fetch peer profile
+      const peerServerProfile = await fetchServerProfile(peerType);
+      if (peerServerProfile) {
+        console.log(`[PROFILE] Loaded peer profile (${peerType}):`, peerServerProfile.name);
+        setPeerProfile(prev => ({
+          ...prev,
+          name: peerServerProfile.name,
+          avatar: peerServerProfile.avatar
+        }));
+        localStorage.setItem(`chat_peer_profile_${userType}`, JSON.stringify({
+          name: peerServerProfile.name,
+          avatar: peerServerProfile.avatar
+        }));
+      }
+      
+      setIsLoadingProfiles(false);
+    };
+    loadProfiles();
+  }, [userType]);
+
+  // Initialize messages as empty - server is the source of truth
+  // localStorage is only used as a cache, not as initial state
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(true);
 
   const [activeCall, setActiveCall] = useState<'voice' | 'video' | null>(null);
   const [incomingCall, setIncomingCall] = useState<{
@@ -290,6 +330,9 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const sessionId = useRef<string>(
     `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
   );
+  const lastSyncTimestamp = useRef<number>(
+    parseInt(localStorage.getItem(`lastSyncTimestamp_${userType}`) || '0', 10)
+  );
 
   const myProfileRef = useRef(myProfile);
   const peerProfileRef = useRef(peerProfile);
@@ -311,6 +354,18 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   useEffect(() => {
     peerConnectedRef.current = peerConnected;
   }, [peerConnected]);
+
+  // Trigger a read receipt for a single message if chat is visible
+  function tryMarkAsRead(message: Message) {
+    if (message.sender !== 'them') return;
+    if (!isDocumentVisible.current) return;
+    if (!wsRef.current) return;
+
+    sendSignal({
+      type: "message-read",
+      ids: [message.id],
+    });
+  }
 
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -359,8 +414,11 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   ]);
 
   const getWebSocketUrl = () => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.host}/ws`;
+    const WS_URL =
+      window.location.origin.startsWith("http")
+        ? window.location.origin.replace("http", "ws")
+        : `wss://${window.location.host}`;
+    return `${WS_URL}/ws`;
   };
 
   const sendSignal = useCallback((data: any, queueIfOffline = false) => {
@@ -381,16 +439,23 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     }
   }, []);
 
-  const updateMyProfile = useCallback((updates: Partial<UserProfile>) => {
-    setMyProfile((prev) => {
-      const updated = { ...prev, ...updates };
+  const updateMyProfile = useCallback(async (updates: Partial<UserProfile>) => {
+    const newProfile = { ...myProfile, ...updates };
+    
+    // Save to server first (source of truth)
+    const saved = await saveServerProfile(userType, newProfile.name, newProfile.avatar);
+    
+    if (saved) {
+      // Update local state
+      setMyProfile(prev => ({ ...prev, ...updates }));
+      
+      // Also broadcast via socket for real-time update
       sendSignal({
         type: 'profile-update',
-        profile: { name: updated.name, avatar: updated.avatar }
+        profile: { name: newProfile.name, avatar: newProfile.avatar }
       });
-      return updated;
-    });
-  }, [sendSignal]);
+    }
+  }, [myProfile, userType, sendSignal]);
 
   const cleanupCall = useCallback(() => {
     if (localStreamRef.current) {
@@ -582,12 +647,12 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   }, []);
 
   const handleMessage = useCallback(async (data: any) => {
-    // Prevent processing duplicate messages
-    if (data.id && processedMessageIds.current.has(data.id)) {
-      return;
-    }
+    // Note: We do NOT skip messages based on processedMessageIds here.
+    // Individual handlers (chat-message, sync-messages, etc.) do proper merging
+    // to update status and fields even for existing messages.
     switch (data.type) {
-      case 'joined': {
+      case 'joined':
+      case 'room-joined': {
         if (data.peerProfile) {
           setPeerProfile((prev) => ({
             ...prev,
@@ -597,26 +662,18 @@ export function useChatConnection(userType: 'admin' | 'friend') {
           }));
         }
         setPeerConnected(Boolean(data.peerOnline));
-
-        if (data.peerOnline) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.sender === 'me' && (m.status === 'sent' || m.status === 'sending')
-                ? { ...m, status: 'delivered' as const }
-                : m
-            )
-          );
-        }
+        setIsPeerOnline(Boolean(data.peerOnline));
         break;
       }
 
       case 'peer-joined': {
         setPeerConnected(true);
+        setIsPeerOnline(true);
         const peerName = data.profile?.name || defaultPeerName;
         setPeerProfile((prev) => ({
           ...prev,
-          name: data.profile?.name || prev.name,
-          avatar: data.profile?.avatar || prev.avatar,
+          name: data.profile?.name || '',
+          avatar: data.profile?.avatar || '',
           lastSeen: null,
           isTyping: false
         }));
@@ -635,19 +692,12 @@ export function useChatConnection(userType: 'admin' | 'friend') {
           type: 'profile-update',
           profile: { name: myProfileRef.current.name, avatar: myProfileRef.current.avatar }
         });
-
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.sender === 'me' && (m.status === 'sent' || m.status === 'sending')
-              ? { ...m, status: 'delivered' as const }
-              : m
-          )
-        );
         break;
       }
 
       case 'peer-left': {
         setPeerConnected(false);
+        setIsPeerOnline(false);
         const leftPeerName = peerProfileRef.current.name || defaultPeerName;
         setPeerProfile((prev) => ({
           ...prev,
@@ -662,27 +712,44 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         break;
       }
 
-      case 'profile-update': {
-        // Update peer profile (when peer updates their profile)
-        if (data.profile) {
-          setPeerProfile((prev) => ({
-            ...prev,
-            name: data.profile.name,
-            avatar: data.profile.avatar
-          }));
-        }
-        break;
-      }
+      case 'profile-update':
+      case 'profile_updated':
+      case 'peer_profile_updated':
+      case 'peer-profile-update':
+      case 'self-profile-update': {
+        if (!data.profile || !data.userType) break;
 
-      case 'profile_updated': {
-        // Update own profile (when user updates profile on another device)
-        if (data.profile && data.userType === userType) {
-          setMyProfile((prev) => ({
+        const profileUserType = data.userType;   // ONLY trust server-defined userType
+        const peerType = userType === 'admin' ? 'friend' : 'admin';
+
+        console.log(`[PROFILE UPDATE] Received: type=${data.type}, profileUserType=${profileUserType}, myType=${userType}`);
+
+        if (profileUserType === userType) {
+          // MY profile updated (from another device)
+          setMyProfile(prev => ({
             ...prev,
             name: data.profile.name,
             avatar: data.profile.avatar
           }));
+          localStorage.setItem(`chat_my_profile_${userType}`, JSON.stringify({
+            name: data.profile.name,
+            avatar: data.profile.avatar
+          }));
         }
+
+        else if (profileUserType === peerType) {
+          // PEER profile updated
+          setPeerProfile(prev => ({
+            ...prev,
+            name: data.profile.name,
+            avatar: data.profile.avatar
+          }));
+          localStorage.setItem(`chat_peer_profile_${userType}`, JSON.stringify({
+            name: data.profile.name,
+            avatar: data.profile.avatar
+          }));
+        }
+
         break;
       }
 
@@ -694,26 +761,25 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         break;
       }
 
+      case 'password-changed': {
+        // Password was changed (either on this device or another)
+        if (data.userType === userType) {
+          toast({
+            title: '🔐 Password Changed',
+            description: 'Your password has been updated. Use the new password for future logins.'
+          });
+        }
+        break;
+      }
+
       case 'chat-message': {
         const msgId = data.id || `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        
-        // Prevent duplicate message processing
-        if (processedMessageIds.current.has(msgId)) {
-          return;
-        }
-        processedMessageIds.current.add(msgId);
-        
-        // Clean up old message IDs to prevent memory leak
-        if (processedMessageIds.current.size > 1000) {
-          const idsArray = Array.from(processedMessageIds.current);
-          processedMessageIds.current = new Set(idsArray.slice(-500));
-        }
 
-        const msgSenderName = data.senderName || defaultPeerName;
+        const msgSenderName = data.senderName || '';
         const incomingSender: 'me' | 'them' =
           data.sender === 'me' ? 'me' : 'them';
 
-        const newMsg: Message = {
+        const incomingMsg: Message = {
           id: msgId,
           text: data.text || '',
           sender: incomingSender,
@@ -729,28 +795,66 @@ export function useChatConnection(userType: 'admin' | 'friend') {
           replyTo: data.replyTo
         };
 
+        // Always merge: update existing or insert new
         setMessages((prev) => {
-          if (prev.some((m) => m.id === newMsg.id)) return prev;
-          return [...prev, newMsg];
+          const existingIndex = prev.findIndex((m) => m.id === msgId);
+          
+          if (existingIndex >= 0) {
+            // Update existing message (merge fields, preserve higher status)
+            const existing = prev[existingIndex];
+            const statusPriority: Record<string, number> = {
+              'sent': 1, 'delivered': 2, 'read': 3
+            };
+            const existingPriority = statusPriority[existing.status || 'sent'] ?? 1;
+            const incomingPriority = statusPriority[incomingMsg.status || 'sent'] ?? 1;
+            
+            const updated = [...prev];
+            updated[existingIndex] = {
+              ...existing,
+              ...incomingMsg,
+              // Keep higher status (don't downgrade)
+              status: incomingPriority >= existingPriority ? incomingMsg.status : existing.status
+            };
+            return updated;
+          }
+          
+          // Insert new message
+          return [...prev, incomingMsg].sort(
+            (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          );
         });
+
+        // Clean up old message IDs to prevent memory leak
+        if (processedMessageIds.current.size > 1000) {
+          const idsArray = Array.from(processedMessageIds.current);
+          processedMessageIds.current = new Set(idsArray.slice(-500));
+        }
+
+        // Update lastSyncTimestamp
+        const msgTimestamp = incomingMsg.timestamp.getTime();
+        if (msgTimestamp > lastSyncTimestamp.current) {
+          lastSyncTimestamp.current = msgTimestamp;
+          localStorage.setItem(`lastSyncTimestamp_${userType}`, msgTimestamp.toString());
+        }
 
         setPeerProfile((prev) => ({ ...prev, isTyping: false }));
 
-        if (incomingSender === 'them' && isDocumentVisible.current) {
-          sendSignal({ type: 'message-read', ids: [newMsg.id] });
+        // Auto-mark incoming messages as read instantly
+        if (incomingSender === 'them') {
+          tryMarkAsRead(incomingMsg);
         }
 
         if (userType === 'admin' && incomingSender === 'them') {
           const msgPreview =
-            newMsg.type === 'text'
-              ? newMsg.text.length > 50
-                ? newMsg.text.substring(0, 50) + '...'
-                : newMsg.text
-              : newMsg.type === 'image'
+            incomingMsg.type === 'text'
+              ? incomingMsg.text.length > 50
+                ? incomingMsg.text.substring(0, 50) + '...'
+                : incomingMsg.text
+              : incomingMsg.type === 'image'
               ? '📷 Photo'
-              : newMsg.type === 'video'
+              : incomingMsg.type === 'video'
               ? '🎥 Video'
-              : newMsg.type === 'audio'
+              : incomingMsg.type === 'audio'
               ? '🎤 Voice message'
               : 'New message';
 
@@ -810,16 +914,30 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         break;
       }
 
-      case 'message-status': {
-        setMessages((prev) =>
-          prev.map((m) =>
-            data.ids.includes(m.id) && m.sender === 'me'
-              ? {
-                  ...m,
-                  status: data.status as 'sent' | 'delivered' | 'read'
-                }
-              : m
-          )
+      case 'message_update': {
+        // Unified message status update event
+        // { type: 'message_update', ids: [...], status: 'sent' | 'delivered' | 'read' }
+
+        if (!Array.isArray(data.ids) || !data.status) break;
+
+        const statusPriority: Record<string, number> = {
+          'sent': 1,
+          'delivered': 2,
+          'read': 3
+        };
+        const newStatusPriority = statusPriority[data.status] ?? 1;
+
+        setMessages(prev =>
+          prev.map(m => {
+            if (!data.ids.includes(m.id)) return m;
+
+            const currentPriority = statusPriority[m.status || 'sent'] ?? 1;
+            // Only update if new status is higher priority (don't go backwards)
+            if (newStatusPriority > currentPriority) {
+              return { ...m, status: data.status as 'sent' | 'delivered' | 'read' };
+            }
+            return m;
+          })
         );
         break;
       }
@@ -849,31 +967,79 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
       case 'sync-messages': {
         if (data.messages && Array.isArray(data.messages)) {
-          setMessages((prev) => {
-            const existingIds = new Set(prev.map((m) => m.id));
-            const newMessages: Message[] = data.messages
-              .filter((m: any) => !existingIds.has(m.id))
-              .map((m: any) => ({
-                ...m,
-                timestamp: new Date(m.timestamp),
-                replyTo: m.replyTo ? {
-                  id: m.replyTo.id,
-                  text: m.replyTo.text || '',
-                  sender: m.replyTo.sender
-                } : undefined
-              }));
+          console.log(`[SYNC] Received ${data.messages.length} messages from server, current local: ${messagesRef.current.length}`);
+          
+          const statusPriority: Record<string, number> = {
+            'sending': 0, 'sent': 1, 'delivered': 2, 'read': 3
+          };
 
-            if (newMessages.length > 0) {
-              newMessages.forEach(m => processedMessageIds.current.add(m.id));
-              const merged = [...prev, ...newMessages].sort(
-                (a, b) =>
-                  new Date(a.timestamp).getTime() -
-                  new Date(b.timestamp).getTime()
-              );
-              return merged;
+          // Convert incoming messages to Message format
+          const incomingMessages: Message[] = data.messages.map((m: any) => ({
+            id: m.id,
+            text: m.text || '',
+            sender: m.sender as 'me' | 'them',
+            timestamp: new Date(m.timestamp),
+            type: m.type || m.messageType || 'text',
+            mediaUrl: m.mediaUrl,
+            senderName: m.senderName || defaultPeerName,
+            status: m.status || 'delivered',
+            replyTo: m.replyTo ? {
+              id: m.replyTo.id,
+              text: m.replyTo.text || '',
+              sender: m.replyTo.sender
+            } : undefined
+          }));
+
+          setMessages((prev) => {
+            // Build a map of existing messages by ID
+            const messageMap = new Map<string, Message>();
+            prev.forEach(m => messageMap.set(m.id, m));
+
+            // Merge incoming messages
+            for (const incoming of incomingMessages) {
+              const existing = messageMap.get(incoming.id);
+              
+              if (existing) {
+                // Update existing: merge fields, preserve higher status
+                const existingPriority = statusPriority[existing.status || 'sending'] ?? 0;
+                const incomingPriority = statusPriority[incoming.status || 'sent'] ?? 1;
+                
+                messageMap.set(incoming.id, {
+                  ...existing,
+                  ...incoming,
+                  status: incomingPriority >= existingPriority ? incoming.status : existing.status
+                });
+              } else {
+                // Insert new message
+                messageMap.set(incoming.id, incoming);
+              }
             }
-            return prev;
+
+            // Convert back to array and sort by timestamp
+            const merged = Array.from(messageMap.values()).sort(
+              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+            );
+
+            // Update lastSyncTimestamp
+            if (merged.length > 0) {
+              const latestTimestamp = Math.max(
+                ...merged.map(m => new Date(m.timestamp).getTime())
+              );
+              lastSyncTimestamp.current = latestTimestamp;
+              localStorage.setItem(`lastSyncTimestamp_${userType}`, latestTimestamp.toString());
+            }
+
+            console.log(`[SYNC] After merge: ${merged.length} total messages`);
+            return merged;
           });
+
+          const unread = incomingMessages
+            .filter(m => m.sender === 'them' && m.status !== 'read')
+            .map(m => m.id);
+
+          if (unread.length > 0 && isDocumentVisible.current) {
+            sendSignal({ type: "message-read", ids: unread });
+          }
         }
         break;
       }
@@ -918,6 +1084,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      console.log("[CLIENT] socket connected as", userType, "deviceId=", deviceId.current);
       ws.send(
         JSON.stringify({
           type: 'join',
@@ -925,7 +1092,8 @@ export function useChatConnection(userType: 'admin' | 'friend') {
           profile: { name: myProfileRef.current.name, avatar: myProfileRef.current.avatar },
           userType,
           deviceId: deviceId.current,
-          sessionId: sessionId.current
+          sessionId: sessionId.current,
+          lastSyncTimestamp: lastSyncTimestamp.current
         })
       );
       setIsConnected(true);
@@ -949,13 +1117,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
     ws.onclose = () => {
       setIsConnected(false);
-      setPeerConnected(false);
-      setPeerProfile((prev) => ({
-        ...prev,
-        lastSeen: new Date(),
-        isTyping: false
-      }));
-      
+
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
@@ -992,7 +1154,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       type: msg.type || 'text',
       mediaUrl: msg.mediaUrl ? String(msg.mediaUrl).slice(0, 2048) : undefined, // Max URL length
       senderName: myProfileRef.current.name.slice(0, 100), // Max name length
-      status: 'sending',
+      status: 'sent',
       replyTo: msg.replyTo ? {
         id: String(msg.replyTo.id).slice(0, 100),
         text: String(msg.replyTo.text || '').slice(0, 500),
@@ -1011,7 +1173,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     sendTyping(false);
 
     sendSignal({
-      type: 'chat-message',
+      type: 'send-message',
       id: newMsg.id,
       text: newMsg.text,
       messageType: newMsg.type,
@@ -1110,9 +1272,9 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         const unreadMessageIds = messagesRef.current
           .filter(m => m.sender === 'them' && m.status !== 'read')
           .map(m => m.id);
-        
+
         if (unreadMessageIds.length > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
-          sendSignal({ type: 'message-read', ids: unreadMessageIds });
+          sendSignal({ type: 'message-read', ids: unreadMessageIds.filter(id => id) });
         }
       }
     };
@@ -1125,21 +1287,61 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
   useEffect(() => {
     const loadHistory = async () => {
+      console.log(`[HYDRATION] Loading messages from server for userType=${userType}`);
       const serverMessages = await fetchChatHistory(userType);
-      if (serverMessages.length > 0) {
-        setMessages((prev) => {
-          const existingIds = new Set(prev.map((m) => m.id));
-          const newMessages = serverMessages.filter((m) => !existingIds.has(m.id));
-          if (newMessages.length > 0) {
-            newMessages.forEach(m => processedMessageIds.current.add(m.id));
-            const merged = [...prev, ...newMessages].sort(
-              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-            );
-            return merged;
+      console.log(`[HYDRATION] Loaded ${serverMessages.length} messages from server (source of truth)`);
+
+      const statusPriority: Record<string, number> = {
+        'sent': 1, 'delivered': 2, 'read': 3
+      };
+
+      setMessages((prev) => {
+        // Build a map of existing messages by ID
+        const messageMap = new Map<string, Message>();
+        prev.forEach(m => messageMap.set(m.id, m));
+
+        // Merge incoming messages
+        for (const incoming of serverMessages) {
+          const existing = messageMap.get(incoming.id);
+
+          if (existing) {
+            // Update existing: merge fields, preserve higher status
+            const existingPriority = statusPriority[existing.status || 'sent'] ?? 1;
+            const incomingPriority = statusPriority[incoming.status || 'sent'] ?? 1;
+
+            messageMap.set(incoming.id, {
+              ...existing,
+              ...incoming,
+              status: incomingPriority >= existingPriority ? incoming.status : existing.status
+            });
+          } else {
+            // Insert new message
+            messageMap.set(incoming.id, incoming);
           }
-          return prev;
-        });
-      }
+        }
+
+        // Convert back to array and sort by timestamp
+        const merged = Array.from(messageMap.values()).sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+
+        // Update localStorage cache with merged data
+        localStorage.setItem(`chat_messages_${userType}`, JSON.stringify(merged));
+
+        // Update sync timestamp
+        if (merged.length > 0) {
+          const latestTimestamp = Math.max(
+            ...merged.map(m => new Date(m.timestamp).getTime())
+          );
+          lastSyncTimestamp.current = latestTimestamp;
+          localStorage.setItem(`lastSyncTimestamp_${userType}`, latestTimestamp.toString());
+        }
+
+        console.log(`[HYDRATION] After merge: ${merged.length} total messages`);
+        return merged;
+      });
+
+      setIsLoadingMessages(false);
     };
 
     loadHistory();
@@ -1172,9 +1374,27 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     };
   }, [connect, cleanupCall]);
 
+  useEffect(() => {
+    const handler = () => {
+      if (document.visibilityState === "visible") {
+        const unread = messagesRef.current
+          .filter(m => m.sender === "them" && m.status !== "read")
+          .map(m => m.id);
+
+        if (unread.length > 0) {
+          sendSignal({ type: "message-read", ids: unread });
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
+  }, []);
+
   return {
     isConnected,
     peerConnected,
+    isPeerOnline,
     myProfile,
     peerProfile,
     updateMyProfile,
@@ -1199,6 +1419,8 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     isMuted,
     isVideoOff,
     deviceId: deviceId.current,
-    sessionId: sessionId.current
+    sessionId: sessionId.current,
+    isLoadingMessages,
+    isLoadingProfiles
   };
 }

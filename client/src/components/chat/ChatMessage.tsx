@@ -12,7 +12,7 @@ interface Message {
   timestamp: Date;
   type: "text" | "image" | "video" | "audio";
   mediaUrl?: string;
-  status?: "sending" | "sent" | "delivered" | "read";
+  status?: "sent" | "delivered" | "read";
   replyTo?: {
     id: string;
     text: string;
@@ -291,7 +291,6 @@ export default memo(function ChatMessage({
 
           {msg.sender === "me" && (
             <>
-              {msg.status === "sending" && <Clock size={12} />}
               {msg.status === "sent" && <Check size={12} />}
               {msg.status === "delivered" && <CheckCheck size={12} />}
               {msg.status === "read" && (

@@ -9,43 +9,13 @@ interface LoginOverlayProps {
   onClose: () => void;
 }
 
-interface Passwords {
-  gatekeeper_key: string;
-  admin_pass: string;
-  friend_pass: string;
-  admin_pass_changed_at?: string | null;
-  friend_pass_changed_at?: string | null;
-  gatekeeper_changed_at?: string | null;
-}
-
 export function LoginOverlay({ isOpen, onSuccess, onClose }: LoginOverlayProps) {
   const [password, setPassword] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [error, setError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
   const [step, setStep] = useState<'gatekeeper' | 'personal'>('gatekeeper');
   const [loading, setLoading] = useState(false);
-  const [serverPasswords, setServerPasswords] = useState<Passwords | null>(null);
-
-  // Fetch passwords from server - always get fresh data
-  useEffect(() => {
-    if (isOpen) {
-      setServerPasswords(null); // Clear old passwords first
-      fetch('/api/auth/passwords', { cache: 'no-store' })
-        .then(res => res.json())
-        .then(data => {
-          console.log('Loaded passwords from server');
-          setServerPasswords(data);
-        })
-        .catch(() => {
-          // Fallback to defaults if server unavailable
-          setServerPasswords({
-            gatekeeper_key: 'secret',
-            admin_pass: 'admin123',
-            friend_pass: 'friend123'
-          });
-        });
-    }
-  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -53,28 +23,51 @@ export function LoginOverlay({ isOpen, onSuccess, onClose }: LoginOverlayProps) 
       setSecretKey("");
       setStep('gatekeeper');
       setError(false);
+      setErrorMessage("");
     }
   }, [isOpen]);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!serverPasswords) return;
+    if (loading) return;
     
-    if (step === 'gatekeeper') {
-      if (secretKey === serverPasswords.gatekeeper_key) {
-        setStep('personal');
-        setError(false);
+    setLoading(true);
+    setError(false);
+    setErrorMessage("");
+
+    try {
+      if (step === 'gatekeeper') {
+        const res = await fetch('/api/auth/gatekeeper/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: secretKey }),
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          setStep('personal');
+        } else {
+          shakeError();
+        }
       } else {
-        shakeError();
+        const res = await fetch('/api/auth/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          onSuccess(data.userType);
+        } else {
+          shakeError();
+        }
       }
-    } else {
-      if (password === serverPasswords.admin_pass) {
-        onSuccess('admin');
-      } else if (password === serverPasswords.friend_pass) {
-        onSuccess('friend');
-      } else {
-        shakeError();
-      }
+    } catch {
+      setErrorMessage("Network error. Please try again.");
+      setError(true);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -123,16 +116,25 @@ export function LoginOverlay({ isOpen, onSuccess, onClose }: LoginOverlayProps) 
                 />
               </div>
               {error && (
-                <p className="text-red-400 text-xs text-center mt-2">Invalid {step === 'gatekeeper' ? 'key' : 'password'}</p>
+                <p className="text-red-400 text-xs text-center mt-2">
+                  {errorMessage || `Invalid ${step === 'gatekeeper' ? 'key' : 'password'}`}
+                </p>
               )}
             </div>
 
             <button 
               type="submit"
-              className="w-full bg-white text-black font-medium py-4 rounded-lg flex items-center justify-center gap-2 hover:bg-white/90 transition-colors active:scale-[0.98]"
+              disabled={loading}
+              className="w-full bg-white text-black font-medium py-4 rounded-lg flex items-center justify-center gap-2 hover:bg-white/90 transition-colors active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {step === 'gatekeeper' ? 'Continue' : 'Login'} 
-              <ArrowRight size={18} />
+              {loading ? (
+                <Loader2 size={18} className="animate-spin" />
+              ) : (
+                <>
+                  {step === 'gatekeeper' ? 'Continue' : 'Login'} 
+                  <ArrowRight size={18} />
+                </>
+              )}
             </button>
           </form>
         </div>

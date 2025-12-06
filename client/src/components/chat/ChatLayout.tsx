@@ -125,6 +125,7 @@ export function ChatLayout({
   const {
     isConnected,
     peerConnected,
+    isPeerOnline,
     myProfile,
     peerProfile,
     updateMyProfile,
@@ -466,13 +467,13 @@ export function ChatLayout({
 
   // last seen
   const getLastSeenText = useMemo(() => {
-    if (peerConnected) return "Online";
+    if (isPeerOnline) return "Online";
     const lastSeen = (peerProfile as any).lastSeen;
     if (lastSeen) {
       return `Last seen ${formatDistanceToNow(lastSeen, { addSuffix: true })}`;
     }
     return "Offline";
-  }, [peerConnected, (peerProfile as any).lastSeen]);
+  }, [isPeerOnline, (peerProfile as any).lastSeen]);
 
   // double tap header -> lock
   const [tapCount, setTapCount] = useState(0);
@@ -628,7 +629,7 @@ export function ChatLayout({
                     <span
                       className={cn(
                         "w-2 h-2 rounded-full",
-                        peerConnected ? "bg-emerald-500" : "bg-zinc-500"
+                        isPeerOnline ? "bg-emerald-500" : "bg-zinc-500"
                       )}
                     />
                   </div>
@@ -716,7 +717,7 @@ export function ChatLayout({
                   <span
                     className={cn(
                       "w-2 h-2 rounded-full",
-                      peerConnected ? "bg-emerald-500" : "bg-zinc-500"
+                      isPeerOnline ? "bg-emerald-500" : "bg-zinc-500"
                     )}
                   />
                 </div>
@@ -957,7 +958,7 @@ export function ChatLayout({
                     <span
                       className={cn(
                         "text-xs truncate block",
-                        peerConnected
+                        isPeerOnline
                           ? "text-emerald-400"
                           : "text-zinc-400"
                       )}

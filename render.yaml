@@ -1,27 +1,28 @@
-databases:
-  - name: secure-chat-db
-    plan: free
-    databaseName: securechat
-    user: securechat
-
 services:
   - type: web
-    name: secure-chat-app
-    runtime: node
+    name: pyqmaster
+    env: node
     plan: free
-    buildCommand: npm install && npm run build
-    startCommand: node ./dist/index.cjs
-    healthCheckPath: /health
+
+    buildCommand: "npm install && npm run build"
+    startCommand: "npm start"
+    autoDeploy: true
+
+    # Required for WebSocket stability on Render
+    headers:
+      - key: Connection
+        value: keep-alive
+
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 10000
-      - key: TSC_COMPILE_ON_ERROR
-        value: true
+
       - key: DATABASE_URL
-        fromDatabase:
-          name: secure-chat-db
-          property: connectionString
-    # WebSocket settings for Render
-    autoDeploy: true
+        value: postgresql://neondb_owner:npg_YFt0nV6xBjUJ@ep-patient-dawn-a1bczy22-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+
+      - key: SESSION_SECRET
+        value: 8f3b4d9e27ac1fbf6d8c29e45a7c0b12dfe9834a76b1cd9023af58c41e7d29f4
+
+databases:
+  - name: pyqmaster-db
+    plan: free
