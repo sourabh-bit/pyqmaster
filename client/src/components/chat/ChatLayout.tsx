@@ -319,17 +319,48 @@ export function ChatLayout({
     [sendMessage]
   );
 
+  const compressImage = useCallback(async (file: File, maxWidth = 1600, quality = 0.85): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let { width, height } = img;
+        
+        if (width > maxWidth) {
+          height = (height * maxWidth) / width;
+          width = maxWidth;
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  }, []);
+
   const uploadToCloudinary = useCallback(async (file: File): Promise<string | null> => {
     try {
-      const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-      });
-      reader.readAsDataURL(file);
-      const base64Data = await base64Promise;
-
       const mediaType = file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'image';
+      
+      let base64Data: string;
+      
+      if (mediaType === 'image' && file.size > 500 * 1024) {
+        base64Data = await compressImage(file);
+      } else {
+        const reader = new FileReader();
+        const base64Promise = new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+        });
+        reader.readAsDataURL(file);
+        base64Data = await base64Promise;
+      }
       
       const response = await fetch('/api/upload', {
         method: 'POST',
@@ -349,7 +380,7 @@ export function ChatLayout({
       toast({ variant: 'destructive', title: 'Failed to upload media' });
       return null;
     }
-  }, [toast]);
+  }, [toast, compressImage]);
 
   const handleCamera = useCallback(() => {
     const input = document.createElement('input');

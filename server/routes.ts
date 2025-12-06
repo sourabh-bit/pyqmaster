@@ -747,8 +747,13 @@ export async function registerRoutes(
     const apiKey = process.env.CLOUDINARY_API_KEY;
     const apiSecret = process.env.CLOUDINARY_API_SECRET;
 
+    console.log("[UPLOAD] Checking config:", { 
+      hasCloudName: !!cloudName, 
+      hasApiKey: !!apiKey, 
+      hasApiSecret: !!apiSecret 
+    });
+
     if (!cloudName || !apiKey || !apiSecret) {
-      console.error("Cloudinary not configured:", { cloudName: !!cloudName, apiKey: !!apiKey, apiSecret: !!apiSecret });
       return res.status(503).json({
         success: false,
         error: "Media upload is disabled (Cloudinary not configured).",
@@ -762,39 +767,43 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, error: "No data provided" });
       }
 
-      console.log(`[UPLOAD] Starting ${type} upload, data length: ${data.length}`);
+      const dataSize = Math.round(data.length / 1024);
+      console.log(`[UPLOAD] Starting ${type} upload, size: ${dataSize}KB`);
 
-      // Generate signature for signed upload
       const timestamp = Math.floor(Date.now() / 1000);
       const folder = "pyqmaster";
       const resourceType = type === "video" ? "video" : type === "audio" ? "video" : "image";
 
-      // Create signature string (params must be in alphabetical order)
-      const signatureString = `folder=${folder}&timestamp=${timestamp}${apiSecret}`;
+      // Create signature (alphabetical order of params)
       const crypto = await import("crypto");
+      const signatureString = `folder=${folder}&timestamp=${timestamp}${apiSecret}`;
       const signature = crypto.createHash("sha1").update(signatureString).digest("hex");
 
-      // Upload to Cloudinary - use JSON body which supports base64 data URLs
+      // Use form-urlencoded format
       const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
+      
+      const params = new URLSearchParams();
+      params.append("file", data);
+      params.append("api_key", apiKey);
+      params.append("timestamp", String(timestamp));
+      params.append("signature", signature);
+      params.append("folder", folder);
+
+      console.log(`[UPLOAD] Sending to Cloudinary...`);
 
       const uploadResponse = await fetch(uploadUrl, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
         },
-        body: JSON.stringify({
-          file: data,
-          api_key: apiKey,
-          timestamp: timestamp,
-          signature: signature,
-          folder: folder,
-        }),
+        body: params.toString(),
       });
 
       const responseText = await uploadResponse.text();
+      console.log(`[UPLOAD] Response status: ${uploadResponse.status}`);
       
       if (!uploadResponse.ok) {
-        console.error("Cloudinary upload failed:", responseText);
+        console.error("[UPLOAD] Cloudinary error:", responseText);
         return res.status(500).json({ success: false, error: "Upload failed" });
       }
 
@@ -806,7 +815,7 @@ export async function registerRoutes(
         mediaUrl: result.secure_url,
       });
     } catch (error) {
-      console.error("Upload error:", error);
+      console.error("[UPLOAD] Error:", error);
       return res.status(500).json({ success: false, error: "Upload failed" });
     }
   });
