@@ -109,6 +109,7 @@ interface UploadProgressPayload {
 interface UploadRequestOptions {
   source?: "camera" | "gallery";
   preferLowMemory?: boolean;
+  suppressErrorToast?: boolean;
 }
 
 export function ChatLayout({
@@ -138,6 +139,7 @@ export function ChatLayout({
   const [isAppVisible, setIsAppVisible] = useState(!document.hidden);
   const [visibleMessageCount, setVisibleMessageCount] = useState(80);
   const [isLowMemoryMode, setIsLowMemoryMode] = useState(false);
+  const [isCallOverlayMinimized, setIsCallOverlayMinimized] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
 
   // selection / reply
@@ -152,9 +154,11 @@ export function ChatLayout({
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasScrolledToBottomOnLoad = useRef(false);
-  const uploadQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const uploadSlotsInUseRef = useRef(0);
+  const uploadWaitersRef = useRef<Array<() => void>>([]);
   const queuedUploadCountRef = useRef(0);
-  const compressionQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const compressionSlotsInUseRef = useRef(0);
+  const compressionWaitersRef = useRef<Array<() => void>>([]);
   const scrollTopLoadThrottleRef = useRef(0);
 
 
@@ -337,6 +341,12 @@ export function ChatLayout({
   }, [emitMobileEvent]);
 
   useEffect(() => {
+    if (!activeCall) {
+      setIsCallOverlayMinimized(false);
+    }
+  }, [activeCall]);
+
+  useEffect(() => {
     const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 0;
     if (deviceMemory > 0 && deviceMemory <= 4) {
       setIsLowMemoryMode(true);
@@ -484,21 +494,76 @@ export function ChatLayout({
     [emitUploadProgress]
   );
 
+  const getMaxParallelCompression = useCallback(() => {
+    if (isLowMemoryMode) return 1;
+    const memoryGb = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 0;
+    if (memoryGb > 0 && memoryGb <= 4) return 1;
+    const connection = (navigator as Navigator & {
+      connection?: { effectiveType?: string };
+    }).connection;
+    const effectiveType = connection?.effectiveType ?? "";
+    if (effectiveType === "slow-2g" || effectiveType === "2g") return 1;
+    return 2;
+  }, [isLowMemoryMode]);
+
+  const acquireCompressionSlot = useCallback(async () => {
+    const maxParallel = getMaxParallelCompression();
+    if (compressionSlotsInUseRef.current < maxParallel) {
+      compressionSlotsInUseRef.current += 1;
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      compressionWaitersRef.current.push(resolve);
+    });
+    compressionSlotsInUseRef.current += 1;
+  }, [getMaxParallelCompression]);
+
+  const releaseCompressionSlot = useCallback(() => {
+    compressionSlotsInUseRef.current = Math.max(0, compressionSlotsInUseRef.current - 1);
+    const next = compressionWaitersRef.current.shift();
+    if (next) next();
+  }, []);
+
   const runCompressionExclusive = useCallback(
     async <T,>(task: () => Promise<T>): Promise<T> => {
-      let result!: T;
-      const run = compressionQueueRef.current.then(async () => {
-        result = await task();
-      });
-      compressionQueueRef.current = run.then(
-        () => undefined,
-        () => undefined
-      );
-      await run;
-      return result;
+      await acquireCompressionSlot();
+      try {
+        return await task();
+      } finally {
+        releaseCompressionSlot();
+      }
     },
-    []
+    [acquireCompressionSlot, releaseCompressionSlot]
   );
+
+  const getMaxParallelUploads = useCallback(() => {
+    if (isLowMemoryMode) return 1;
+    const connection = (navigator as Navigator & {
+      connection?: { effectiveType?: string };
+    }).connection;
+    const effectiveType = connection?.effectiveType ?? "";
+    if (effectiveType === "slow-2g" || effectiveType === "2g") return 1;
+    if (effectiveType === "3g") return 2;
+    return 3;
+  }, [isLowMemoryMode]);
+
+  const acquireUploadSlot = useCallback(async () => {
+    const maxParallel = getMaxParallelUploads();
+    if (uploadSlotsInUseRef.current < maxParallel) {
+      uploadSlotsInUseRef.current += 1;
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      uploadWaitersRef.current.push(resolve);
+    });
+    uploadSlotsInUseRef.current += 1;
+  }, [getMaxParallelUploads]);
+
+  const releaseUploadSlot = useCallback(() => {
+    uploadSlotsInUseRef.current = Math.max(0, uploadSlotsInUseRef.current - 1);
+    const next = uploadWaitersRef.current.shift();
+    if (next) next();
+  }, []);
 
   const queueUpload = useCallback(
     async (fileName: string, task: () => Promise<string | null>) => {
@@ -511,33 +576,40 @@ export function ChatLayout({
         queueSize: queuedUploadCountRef.current,
       });
 
-      const queuedTask = uploadQueueRef.current.then(async () => {
-        try {
-          return await task();
-        } finally {
-          queuedUploadCountRef.current = Math.max(0, queuedUploadCountRef.current - 1);
-          console.log(`[UPLOAD] finished; pending=${queuedUploadCountRef.current}`);
-        }
-      });
-
-      uploadQueueRef.current = queuedTask.then(
-        () => undefined,
-        () => undefined
-      );
-
-      return queuedTask;
+      await acquireUploadSlot();
+      try {
+        return await task();
+      } finally {
+        releaseUploadSlot();
+        queuedUploadCountRef.current = Math.max(0, queuedUploadCountRef.current - 1);
+        console.log(`[UPLOAD] finished; pending=${queuedUploadCountRef.current}`);
+      }
     },
-    [emitUploadProgress]
+    [acquireUploadSlot, emitUploadProgress, releaseUploadSlot]
   );
 
   const compressImage = useCallback(
     async (file: File, qualityMode: UploadQuality): Promise<Blob> =>
       runCompressionExclusive(async () => {
+        const connection = (navigator as Navigator & {
+          connection?: { effectiveType?: string };
+        }).connection;
+        const effectiveType = connection?.effectiveType ?? "";
+        const isSlowNetwork = effectiveType === "slow-2g" || effectiveType === "2g" || effectiveType === "3g";
         const targetBytes = qualityMode === "hd" ? 4.5 * 1024 * 1024 : 2.4 * 1024 * 1024;
-        const maxDimension = qualityMode === "hd" ? 2400 : 1680;
+        const maxDimension = isSlowNetwork
+          ? qualityMode === "hd"
+            ? 1920
+            : 1440
+          : qualityMode === "hd"
+          ? 2400
+          : 1680;
         const minLongSide = qualityMode === "hd" ? 900 : 720;
         const minQuality = qualityMode === "hd" ? 0.68 : 0.56;
-        let jpegQuality = qualityMode === "hd" ? 0.9 : 0.82;
+        let jpegQuality = qualityMode === "hd" ? 0.88 : 0.8;
+        if (file.size > 8 * 1024 * 1024) {
+          jpegQuality = Math.max(minQuality, jpegQuality - 0.08);
+        }
         let source: CanvasImageSource;
         let sourceWidth = 0;
         let sourceHeight = 0;
@@ -592,7 +664,7 @@ export function ChatLayout({
           let bestBlob: Blob | null = null;
           let pass = 0;
 
-          while (pass < 8) {
+          while (pass < 6) {
             pass += 1;
             canvas.width = width;
             canvas.height = height;
@@ -643,12 +715,15 @@ export function ChatLayout({
       queueUpload(file.name, async () => {
         try {
           const presetName = "chat_upload";
-          const retryBackoffMs = [500, 1500, 3000];
+          const retryBackoffMs =
+            options?.source === "gallery" ? [250, 800, 1500] : [500, 1500, 3000];
           const maxAttempts = retryBackoffMs.length + 1;
           const shouldAvoidCompression =
             Boolean(options?.preferLowMemory) ||
             isLowMemoryMode ||
             options?.source === "camera";
+          const compressionThresholdBytes =
+            options?.source === "gallery" ? Math.round(1.8 * 1024 * 1024) : 1024 * 1024;
 
           console.log(
             `[UPLOAD] start name=${file.name} type=${file.type} original=${toMb(file.size)}MB quality=${uploadQuality}`
@@ -664,7 +739,7 @@ export function ChatLayout({
           await waitForVisible();
 
           let fileToUpload: File | Blob = file;
-          if (file.type.startsWith("image/") && file.size > 1024 * 1024 && !shouldAvoidCompression) {
+          if (file.type.startsWith("image/") && file.size > compressionThresholdBytes && !shouldAvoidCompression) {
             emitUploadProgress({
               fileName: file.name,
               stage: "compressing",
@@ -687,7 +762,8 @@ export function ChatLayout({
             await wait(0);
           }
 
-          const uploadUrl = "https://api.cloudinary.com/v1_1/dqdx30pbj/auto/upload";
+          const resourceType = file.type.startsWith("video/") ? "video" : "image";
+          const uploadUrl = `https://api.cloudinary.com/v1_1/dqdx30pbj/${resourceType}/upload`;
           let lastError: unknown = null;
 
           for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -709,7 +785,7 @@ export function ChatLayout({
                 uploadUrl,
                 formData,
                 {
-                  timeoutMs: 60_000,
+                  timeoutMs: options?.source === "gallery" ? 120_000 : 90_000,
                   onProgress: ({ loaded, total }) => {
                     if (total <= 0) return;
                     const ratio = Math.min(1, Math.max(0, loaded / total));
@@ -780,7 +856,9 @@ export function ChatLayout({
             progress: 100,
             message: e instanceof Error ? e.message : "Upload failed",
           });
-          toast({ variant: "destructive", title: "Failed to upload media" });
+          if (!options?.suppressErrorToast) {
+            toast({ variant: "destructive", title: "Failed to upload media" });
+          }
           return null;
         }
       }),
@@ -864,14 +942,38 @@ export function ChatLayout({
       try {
         const files = (e.target as HTMLInputElement).files;
         if (!files || files.length === 0) return;
-        toast({ title: `Uploading ${files.length} file(s)...` });
-        for (const file of Array.from(files)) {
-          const url = await uploadToCloudinary(file, { source: "gallery" });
-          if (!url) continue;
-          const type = file.type.startsWith("image/") ? "image" : "video";
-          sendMessage({ type, mediaUrl: url, text: "" });
-          await wait(0);
+        const filesArray = Array.from(files).sort((a, b) => a.size - b.size);
+        toast({ title: `Uploading ${filesArray.length} file(s)...` });
+        let successCount = 0;
+        let failedCount = 0;
+
+        await Promise.all(
+          filesArray.map(async (file) => {
+            const url = await uploadToCloudinary(file, {
+              source: "gallery",
+              suppressErrorToast: true,
+            });
+            if (!url) {
+              failedCount += 1;
+              return;
+            }
+            const type = file.type.startsWith("image/") ? "image" : "video";
+            sendMessage({ type, mediaUrl: url, text: "" });
+            successCount += 1;
+            await wait(0);
+          })
+        );
+
+        if (failedCount > 0) {
+          toast({
+            variant: "destructive",
+            title: `${failedCount} file(s) failed`,
+            description: `${successCount} sent successfully`,
+          });
+        } else {
+          toast({ title: `${successCount} file(s) sent` });
         }
+
         // Scroll to bottom after sending gallery media
         requestAnimationFrame(() => {
           scrollToBottom();
@@ -1297,6 +1399,8 @@ const messagesList = useMemo(
                 onToggleMute={toggleMute}
                 onToggleVideo={toggleVideo}
                 onEndCall={endCall}
+                onMinimize={() => setIsCallOverlayMinimized(true)}
+                isMinimized={isCallOverlayMinimized}
               />
             </Suspense>
           )}
@@ -1544,6 +1648,16 @@ const messagesList = useMemo(
               </>
             )}
           </header>
+
+          {activeCall && isCallOverlayMinimized && (
+            <button
+              type="button"
+              onClick={() => setIsCallOverlayMinimized(false)}
+              className="fixed top-[calc(env(safe-area-inset-top,0px)+62px)] right-3 z-[60] md:top-4 md:right-4 px-3 py-2 rounded-full bg-emerald-600/90 text-white text-xs font-medium shadow-lg backdrop-blur border border-emerald-300/20"
+            >
+              Return to call
+            </button>
+          )}
 
           {/* MESSAGES */}
           <div

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Mic, MicOff, Video, VideoOff, PhoneOff, RotateCcw } from "lucide-react";
+import { ChevronLeft, Mic, MicOff, Video, VideoOff, PhoneOff, RotateCcw } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +11,8 @@ interface ActiveCallOverlayProps {
   onToggleMute: () => void;
   onToggleVideo: () => void;
   onEndCall: () => void;
+  onMinimize?: () => void;
+  isMinimized?: boolean;
   callStatus?: string;
   peerName?: string;
   peerAvatar?: string;
@@ -24,30 +26,58 @@ export function ActiveCallOverlay({
   onToggleMute,
   onToggleVideo,
   onEndCall,
+  onMinimize,
+  isMinimized = false,
   callStatus,
   peerName = "Friend",
   peerAvatar
 }: ActiveCallOverlayProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const localPreviewRef = useRef<HTMLDivElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const [duration, setDuration] = useState(0);
   const [showLocalVideo, setShowLocalVideo] = useState(true);
   const [lastRemoteFrame, setLastRemoteFrame] = useState<string | null>(null);
   const [isMobileLayout, setIsMobileLayout] = useState(() => window.innerWidth < 768);
+  const [localPreviewPosition, setLocalPreviewPosition] = useState<{ x: number; y: number } | null>(null);
 
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const lastRemoteFrameUrlRef = useRef<string | null>(null);
+  const dragStateRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    moved: boolean;
+  } | null>(null);
 
   const captureRemoteFrame = useCallback(() => {
     const video = remoteVideoRef.current;
     if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) return;
     const canvas = document.createElement("canvas");
-    const scale = Math.min(1, 640 / video.videoWidth);
+    const scale = Math.min(1, 360 / video.videoWidth);
     canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
     canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    setLastRemoteFrame(canvas.toDataURL("image/jpeg", 0.65));
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) return;
+        const frameUrl = URL.createObjectURL(blob);
+        if (lastRemoteFrameUrlRef.current) {
+          URL.revokeObjectURL(lastRemoteFrameUrlRef.current);
+        }
+        lastRemoteFrameUrlRef.current = frameUrl;
+        setLastRemoteFrame(frameUrl);
+      },
+      "image/jpeg",
+      0.52
+    );
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    canvas.width = 0;
+    canvas.height = 0;
   }, []);
 
   const bindVideoStream = useCallback(
@@ -63,6 +93,50 @@ export function ActiveCallOverlay({
     []
   );
 
+  const getPreviewBounds = useCallback(
+    (previewWidth: number, previewHeight: number) => {
+      const margin = 12;
+      const topInset = 88 + (window.visualViewport?.offsetTop ?? 0);
+      const bottomInset = 136;
+      return {
+        minX: margin,
+        maxX: Math.max(margin, window.innerWidth - previewWidth - margin),
+        minY: topInset,
+        maxY: Math.max(topInset, window.innerHeight - previewHeight - bottomInset),
+      };
+    },
+    []
+  );
+
+  const clampPosition = useCallback(
+    (x: number, y: number, previewWidth: number, previewHeight: number) => {
+      const bounds = getPreviewBounds(previewWidth, previewHeight);
+      return {
+        x: Math.min(bounds.maxX, Math.max(bounds.minX, x)),
+        y: Math.min(bounds.maxY, Math.max(bounds.minY, y)),
+      };
+    },
+    [getPreviewBounds]
+  );
+
+  const snapToNearestCorner = useCallback(
+    (x: number, y: number, previewWidth: number, previewHeight: number) => {
+      const bounds = getPreviewBounds(previewWidth, previewHeight);
+      const corners = [
+        { x: bounds.minX, y: bounds.minY },
+        { x: bounds.maxX, y: bounds.minY },
+        { x: bounds.minX, y: bounds.maxY },
+        { x: bounds.maxX, y: bounds.maxY },
+      ];
+      return corners.reduce((closest, corner) => {
+        const cornerDistance = (corner.x - x) ** 2 + (corner.y - y) ** 2;
+        const closestDistance = (closest.x - x) ** 2 + (closest.y - y) ** 2;
+        return cornerDistance < closestDistance ? corner : closest;
+      }, corners[0]);
+    },
+    [getPreviewBounds]
+  );
+
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 767px)");
     const applyLayout = (matches: boolean) => setIsMobileLayout(matches);
@@ -76,6 +150,42 @@ export function ActiveCallOverlay({
   useEffect(() => {
     bindVideoStream(localVideoRef.current, localStream, true);
   }, [bindVideoStream, localStream, showLocalVideo]);
+
+  useEffect(() => {
+    if (!isMobileLayout || !showLocalVideo || !localStream) return;
+    const raf = window.requestAnimationFrame(() => {
+      const element = localPreviewRef.current;
+      if (!element) return;
+      const width = element.offsetWidth;
+      const height = element.offsetHeight;
+      setLocalPreviewPosition((prev) => {
+        if (prev) return clampPosition(prev.x, prev.y, width, height);
+        const bounds = getPreviewBounds(width, height);
+        return { x: bounds.maxX, y: bounds.minY };
+      });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [clampPosition, getPreviewBounds, isMobileLayout, localStream, showLocalVideo]);
+
+  useEffect(() => {
+    if (!isMobileLayout) return;
+    const handleResize = () => {
+      const element = localPreviewRef.current;
+      if (!element) return;
+      const width = element.offsetWidth;
+      const height = element.offsetHeight;
+      setLocalPreviewPosition((prev) => {
+        if (!prev) return prev;
+        return clampPosition(prev.x, prev.y, width, height);
+      });
+    };
+    window.addEventListener("resize", handleResize);
+    window.visualViewport?.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.visualViewport?.removeEventListener("resize", handleResize);
+    };
+  }, [clampPosition, isMobileLayout]);
 
   useEffect(() => {
     if (remoteStream) {
@@ -99,27 +209,50 @@ export function ActiveCallOverlay({
 
       const videoEl = remoteVideoRef.current;
       const captureOnChange = () => captureRemoteFrame();
-      const captureTimer = window.setInterval(() => {
-        if (videoEl && !videoEl.paused && !videoEl.ended) {
-          captureRemoteFrame();
-        }
-      }, 1500);
       videoEl?.addEventListener("playing", captureOnChange);
       videoEl?.addEventListener("pause", captureOnChange);
+      videoEl?.addEventListener("waiting", captureOnChange);
       videoEl?.addEventListener("stalled", captureOnChange);
 
       return () => {
-        window.clearInterval(captureTimer);
         videoEl?.removeEventListener("playing", captureOnChange);
         videoEl?.removeEventListener("pause", captureOnChange);
+        videoEl?.removeEventListener("waiting", captureOnChange);
         videoEl?.removeEventListener("stalled", captureOnChange);
         audioTracks.forEach((track) => {
           track.onunmute = null;
         });
       };
     }
+    setLastRemoteFrame((prev) => {
+      if (prev && prev.startsWith("blob:")) {
+        URL.revokeObjectURL(prev);
+      }
+      lastRemoteFrameUrlRef.current = null;
+      return null;
+    });
     return undefined;
   }, [bindVideoStream, captureRemoteFrame, remoteStream]);
+
+  useEffect(() => {
+    if (!isMinimized) return;
+    setLastRemoteFrame((prev) => {
+      if (prev && prev.startsWith("blob:")) {
+        URL.revokeObjectURL(prev);
+      }
+      lastRemoteFrameUrlRef.current = null;
+      return null;
+    });
+  }, [isMinimized]);
+
+  useEffect(() => {
+    return () => {
+      if (lastRemoteFrameUrlRef.current) {
+        URL.revokeObjectURL(lastRemoteFrameUrlRef.current);
+        lastRemoteFrameUrlRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setDuration(d => d + 1), 1000);
@@ -133,9 +266,80 @@ export function ActiveCallOverlay({
   };
 
   const hasRemoteVideo = remoteStream?.getVideoTracks().some(t => t.enabled && t.readyState === 'live');
+  const showVideoHeader = !isMinimized;
+
+  const handleLocalPreviewPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isMobileLayout) return;
+    const element = localPreviewRef.current;
+    if (!element || !localPreviewPosition) return;
+    element.setPointerCapture(e.pointerId);
+    dragStateRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: localPreviewPosition.x,
+      originY: localPreviewPosition.y,
+      moved: false,
+    };
+  }, [isMobileLayout, localPreviewPosition]);
+
+  const handleLocalPreviewPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isMobileLayout) return;
+    const state = dragStateRef.current;
+    const element = localPreviewRef.current;
+    if (!state || !element || state.pointerId !== e.pointerId) return;
+    const dx = e.clientX - state.startX;
+    const dy = e.clientY - state.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      state.moved = true;
+    }
+    const next = clampPosition(
+      state.originX + dx,
+      state.originY + dy,
+      element.offsetWidth,
+      element.offsetHeight
+    );
+    setLocalPreviewPosition(next);
+  }, [clampPosition, isMobileLayout]);
+
+  const handleLocalPreviewPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isMobileLayout) return;
+    const state = dragStateRef.current;
+    const element = localPreviewRef.current;
+    if (!state || !element || state.pointerId !== e.pointerId) return;
+    element.releasePointerCapture(e.pointerId);
+    if (!state.moved) {
+      setShowLocalVideo(false);
+      dragStateRef.current = null;
+      return;
+    }
+    const snapped = snapToNearestCorner(
+      localPreviewPosition?.x ?? state.originX,
+      localPreviewPosition?.y ?? state.originY,
+      element.offsetWidth,
+      element.offsetHeight
+    );
+    setLocalPreviewPosition(snapped);
+    dragStateRef.current = null;
+  }, [isMobileLayout, localPreviewPosition, snapToNearestCorner]);
+
+  const handleLocalPreviewPointerCancel = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const state = dragStateRef.current;
+    const element = localPreviewRef.current;
+    if (state && element && state.pointerId === e.pointerId) {
+      element.releasePointerCapture(e.pointerId);
+    }
+    dragStateRef.current = null;
+  }, []);
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col overflow-hidden">
+    <div
+      className={cn(
+        "fixed inset-0 bg-slate-950 flex flex-col overflow-hidden transition-opacity duration-150",
+        isMobileLayout ? "z-[70]" : "z-50",
+        isMinimized ? "opacity-0 pointer-events-none" : "opacity-100"
+      )}
+    >
       {/* Hidden audio element for reliable audio playback */}
       <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
       
@@ -190,24 +394,61 @@ export function ActiveCallOverlay({
       </div>
 
       {/* Header - Only show when video is active */}
-      {hasRemoteVideo && (
-        <div className="absolute top-0 left-0 right-0 p-4 sm:p-6 z-10 flex flex-col items-center bg-gradient-to-b from-black/70 via-black/30 to-transparent">
-          <h2 className="text-lg sm:text-xl font-semibold text-white drop-shadow-lg">{peerName}</h2>
-          <p className="text-green-400 font-mono text-sm sm:text-base mt-1">{formatDuration(duration)}</p>
-          <p className="text-[10px] sm:text-xs text-white/50 uppercase tracking-widest mt-1">Encrypted</p>
+      {showVideoHeader && (
+        <div
+          className={cn(
+            "absolute left-0 right-0 z-10 bg-gradient-to-b from-black/70 via-black/30 to-transparent",
+            isMobileLayout ? "pt-[calc(env(safe-area-inset-top)+8px)] px-3 pb-3" : "p-4 sm:p-6"
+          )}
+        >
+          <div className={cn("flex items-start", isMobileLayout ? "justify-between" : "justify-center")}>
+            {isMobileLayout ? (
+              <>
+                <button
+                  onClick={onMinimize}
+                  className="p-2 rounded-full bg-black/35 border border-white/15 text-white"
+                  aria-label="Back to chat"
+                >
+                  <ChevronLeft size={20} />
+                </button>
+                <div className="flex-1 text-center px-2">
+                  <h2 className="text-base font-semibold text-white drop-shadow-lg truncate">{peerName}</h2>
+                  <p className="text-green-400 font-mono text-sm mt-0.5">{formatDuration(duration)}</p>
+                  <p className="text-[10px] text-white/60 uppercase tracking-widest mt-0.5">Encrypted</p>
+                </div>
+                <div className="w-10" />
+              </>
+            ) : (
+              <div className="flex flex-col items-center">
+                <h2 className="text-lg sm:text-xl font-semibold text-white drop-shadow-lg">{peerName}</h2>
+                <p className="text-green-400 font-mono text-sm sm:text-base mt-1">{formatDuration(duration)}</p>
+                <p className="text-[10px] sm:text-xs text-white/50 uppercase tracking-widest mt-1">Encrypted</p>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
       {/* Local Video PIP */}
       {showLocalVideo && localStream && (
         <div 
+          ref={localPreviewRef}
           className={cn(
             "absolute bg-black/80 rounded-2xl border-2 border-white/20 overflow-hidden shadow-2xl z-20 cursor-pointer",
             isMobileLayout
-              ? "top-20 right-3 w-[38vw] max-w-[170px] aspect-video"
+              ? "w-[52vw] min-w-[176px] max-w-[240px] aspect-video touch-none"
               : "bottom-32 sm:bottom-36 right-3 sm:right-4 w-28 h-36 sm:w-36 sm:h-48"
           )}
-          onClick={() => setShowLocalVideo(!showLocalVideo)}
+          style={
+            isMobileLayout && localPreviewPosition
+              ? { left: `${localPreviewPosition.x}px`, top: `${localPreviewPosition.y}px` }
+              : undefined
+          }
+          onClick={!isMobileLayout ? () => setShowLocalVideo(!showLocalVideo) : undefined}
+          onPointerDown={handleLocalPreviewPointerDown}
+          onPointerMove={handleLocalPreviewPointerMove}
+          onPointerUp={handleLocalPreviewPointerUp}
+          onPointerCancel={handleLocalPreviewPointerCancel}
         >
           <video
             ref={localVideoRef}
@@ -231,7 +472,7 @@ export function ActiveCallOverlay({
           onClick={() => setShowLocalVideo(true)}
           className={cn(
             "absolute p-3 bg-white/10 rounded-full z-20",
-            isMobileLayout ? "top-20 right-3" : "bottom-32 right-4"
+            isMobileLayout ? "top-[calc(env(safe-area-inset-top)+90px)] right-3" : "bottom-32 right-4"
           )}
         >
           <RotateCcw size={20} className="text-white" />

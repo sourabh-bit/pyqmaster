@@ -464,6 +464,9 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastTypingSentAtRef = useRef(0);
   const currentCallType = useRef<'voice' | 'video' | null>(null);
+  const deviceMemoryGbRef = useRef<number>(
+    (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 0
+  );
   const processedMessageIds = useRef<Set<string>>(new Set());
   const isDocumentVisible = useRef<boolean>(!document.hidden);
   const offlineQueue = useRef<any[]>([]);
@@ -855,6 +858,11 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const getMediaConstraints = useCallback((mode: 'voice' | 'video', profile: VideoProfile = currentVideoProfileRef.current) => {
     const isSd = profile === "sd";
     const isAudioPriority = profile === "audio-priority";
+    const isLowRamDevice =
+      deviceMemoryGbRef.current > 0 && deviceMemoryGbRef.current <= 4;
+    const hdWidth = isLowRamDevice ? 1280 : 1440;
+    const hdHeight = isLowRamDevice ? 720 : 810;
+    const hdFps = isLowRamDevice ? 24 : 30;
     return {
       audio: {
         echoCancellation: { ideal: true },
@@ -868,17 +876,19 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         mode === 'video'
           ? {
               width: {
-                ideal: isAudioPriority ? 320 : isSd ? 854 : 1280,
+                ideal: isAudioPriority ? 480 : isSd ? 960 : hdWidth,
                 max: isAudioPriority ? 640 : isSd ? 1280 : 1920
               },
               height: {
-                ideal: isAudioPriority ? 180 : isSd ? 480 : 720,
+                ideal: isAudioPriority ? 270 : isSd ? 540 : hdHeight,
                 max: isAudioPriority ? 360 : isSd ? 720 : 1080
               },
               frameRate: {
-                ideal: isAudioPriority ? 8 : isSd ? 15 : 24,
-                max: isAudioPriority ? 12 : isSd ? 18 : 30
+                ideal: isAudioPriority ? 10 : isSd ? 20 : hdFps,
+                max: isAudioPriority ? 15 : isSd ? 24 : hdFps
               },
+              aspectRatio: { ideal: 16 / 9 },
+              resizeMode: "crop-and-scale",
               facingMode: 'user'
             }
           : false
@@ -902,6 +912,14 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     const request = navigator.mediaDevices
       .getUserMedia(getMediaConstraints(mode))
       .then((stream) => {
+        const qualityHint = currentVideoProfileRef.current === "hd" ? "detail" : "motion";
+        stream.getVideoTracks().forEach((track) => {
+          try {
+            (track as MediaStreamTrack & { contentHint?: string }).contentHint = qualityHint;
+          } catch {
+            // Some browsers do not allow writing contentHint.
+          }
+        });
         if (localStreamRef.current && localStreamRef.current !== stream) {
           localStreamRef.current.getTracks().forEach((track) => track.stop());
         }
@@ -925,6 +943,11 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     if (!track || track.readyState !== "live") return;
     try {
       await track.applyConstraints(getMediaConstraints('video', profile).video as MediaTrackConstraints);
+      try {
+        (track as MediaStreamTrack & { contentHint?: string }).contentHint = profile === "hd" ? "detail" : "motion";
+      } catch {
+        // Ignore unsupported contentHint assignments.
+      }
       currentVideoProfileRef.current = profile;
       console.log(`[WEBRTC] Applied video profile=${profile}`);
       emitCallTelemetry("quality_change", { from, to: profile, reason });
@@ -1097,19 +1120,19 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         if (currentCallType.current === 'video') {
           let desired: VideoProfile = "hd";
           const severeNetwork =
-            packetLossRate >= 0.12 ||
-            rttMs >= 900 ||
-            jitterMs >= 80 ||
-            (availableBitrateKbps > 0 && availableBitrateKbps < 240) ||
-            (bitrateKbps > 0 && bitrateKbps < 180) ||
-            frameDropRate >= 0.2;
+            packetLossRate >= 0.15 ||
+            rttMs >= 1100 ||
+            jitterMs >= 110 ||
+            (availableBitrateKbps > 0 && availableBitrateKbps < 180) ||
+            (bitrateKbps > 0 && bitrateKbps < 140) ||
+            frameDropRate >= 0.28;
           const moderateNetwork =
-            packetLossRate >= 0.05 ||
-            rttMs >= 450 ||
-            jitterMs >= 45 ||
-            (availableBitrateKbps > 0 && availableBitrateKbps < 900) ||
-            (bitrateKbps > 0 && bitrateKbps < 520) ||
-            frameDropRate >= 0.1;
+            packetLossRate >= 0.08 ||
+            rttMs >= 650 ||
+            jitterMs >= 65 ||
+            (availableBitrateKbps > 0 && availableBitrateKbps < 600) ||
+            (bitrateKbps > 0 && bitrateKbps < 340) ||
+            frameDropRate >= 0.16;
 
           if (severeNetwork) desired = "audio-priority";
           else if (moderateNetwork) desired = "sd";
@@ -2323,6 +2346,12 @@ ws.onclose = () => {
             .then((stream) => {
               const track = stream.getVideoTracks()[0];
               if (!track) return;
+              try {
+                (track as MediaStreamTrack & { contentHint?: string }).contentHint =
+                  currentVideoProfileRef.current === "hd" ? "detail" : "motion";
+              } catch {
+                // Ignore unsupported contentHint assignments.
+              }
               if (!localStreamRef.current) {
                 localStreamRef.current = new MediaStream();
               }
