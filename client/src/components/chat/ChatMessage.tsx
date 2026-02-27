@@ -271,6 +271,8 @@ export default memo(function ChatMessage({
             className="rounded-xl max-h-72 w-full object-cover mt-1 cursor-pointer"
             onClick={handleMediaClick}
             draggable={false}
+            loading="lazy"
+            decoding="async"
           />
         )}
 

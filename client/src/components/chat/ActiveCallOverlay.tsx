@@ -33,6 +33,7 @@ export function ActiveCallOverlay({
   const [duration, setDuration] = useState(0);
   const [showLocalVideo, setShowLocalVideo] = useState(true);
   const [lastRemoteFrame, setLastRemoteFrame] = useState<string | null>(null);
+  const [isMobileLayout, setIsMobileLayout] = useState(() => window.innerWidth < 768);
 
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
 
@@ -49,20 +50,37 @@ export function ActiveCallOverlay({
     setLastRemoteFrame(canvas.toDataURL("image/jpeg", 0.65));
   }, []);
 
+  const bindVideoStream = useCallback(
+    (element: HTMLVideoElement | null, stream: MediaStream | null, muted: boolean) => {
+      if (!element || !stream) return;
+      if (element.srcObject !== stream) {
+        element.srcObject = stream;
+      }
+      element.muted = muted;
+      element.volume = muted ? 0 : 1;
+      element.play().catch(() => {});
+    },
+    []
+  );
+
   useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
-      localVideoRef.current.muted = true;
-      localVideoRef.current.volume = 0;
-    }
-  }, [localStream]);
+    const mediaQuery = window.matchMedia("(max-width: 767px)");
+    const applyLayout = (matches: boolean) => setIsMobileLayout(matches);
+    applyLayout(mediaQuery.matches);
+
+    const listener = (event: MediaQueryListEvent) => applyLayout(event.matches);
+    mediaQuery.addEventListener("change", listener);
+    return () => mediaQuery.removeEventListener("change", listener);
+  }, []);
+
+  useEffect(() => {
+    bindVideoStream(localVideoRef.current, localStream, true);
+  }, [bindVideoStream, localStream, showLocalVideo]);
 
   useEffect(() => {
     if (remoteStream) {
       if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStream;
-        remoteVideoRef.current.muted = false;
-        remoteVideoRef.current.volume = 1;
+        bindVideoStream(remoteVideoRef.current, remoteStream, false);
       }
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
@@ -101,7 +119,7 @@ export function ActiveCallOverlay({
       };
     }
     return undefined;
-  }, [captureRemoteFrame, remoteStream]);
+  }, [bindVideoStream, captureRemoteFrame, remoteStream]);
 
   useEffect(() => {
     const timer = setInterval(() => setDuration(d => d + 1), 1000);
@@ -128,11 +146,21 @@ export function ActiveCallOverlay({
             ref={remoteVideoRef}
             autoPlay
             playsInline
-            className="w-full h-full object-contain bg-black"
+            className={cn(
+              "w-full h-full bg-black",
+              isMobileLayout ? "object-cover" : "object-contain"
+            )}
           />
         ) : remoteStream && lastRemoteFrame ? (
           <div className="relative w-full h-full bg-black flex items-center justify-center">
-            <img src={lastRemoteFrame} alt="Last remote frame" className="w-full h-full object-contain" />
+            <img
+              src={lastRemoteFrame}
+              alt="Last remote frame"
+              className={cn(
+                "w-full h-full",
+                isMobileLayout ? "object-cover" : "object-contain"
+              )}
+            />
             <div className="absolute inset-0 bg-black/25 flex items-end justify-center pb-24">
               <p className="text-white/80 text-sm sm:text-base">Reconnecting video...</p>
             </div>
@@ -173,7 +201,12 @@ export function ActiveCallOverlay({
       {/* Local Video PIP */}
       {showLocalVideo && localStream && (
         <div 
-          className="absolute bottom-32 sm:bottom-36 right-3 sm:right-4 w-28 h-36 sm:w-36 sm:h-48 bg-black/80 rounded-2xl border-2 border-white/20 overflow-hidden shadow-2xl z-20 cursor-pointer"
+          className={cn(
+            "absolute bg-black/80 rounded-2xl border-2 border-white/20 overflow-hidden shadow-2xl z-20 cursor-pointer",
+            isMobileLayout
+              ? "top-20 right-3 w-[38vw] max-w-[170px] aspect-video"
+              : "bottom-32 sm:bottom-36 right-3 sm:right-4 w-28 h-36 sm:w-36 sm:h-48"
+          )}
           onClick={() => setShowLocalVideo(!showLocalVideo)}
         >
           <video
@@ -196,7 +229,10 @@ export function ActiveCallOverlay({
       {!showLocalVideo && localStream && (
         <button
           onClick={() => setShowLocalVideo(true)}
-          className="absolute bottom-32 right-4 p-3 bg-white/10 rounded-full z-20"
+          className={cn(
+            "absolute p-3 bg-white/10 rounded-full z-20",
+            isMobileLayout ? "top-20 right-3" : "bottom-32 right-4"
+          )}
         >
           <RotateCcw size={20} className="text-white" />
         </button>

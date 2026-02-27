@@ -106,6 +106,11 @@ interface UploadProgressPayload {
   message?: string;
 }
 
+interface UploadRequestOptions {
+  source?: "camera" | "gallery";
+  preferLowMemory?: boolean;
+}
+
 export function ChatLayout({
   onLock,
   currentUser,
@@ -533,20 +538,40 @@ export function ChatLayout({
         const minLongSide = qualityMode === "hd" ? 900 : 720;
         const minQuality = qualityMode === "hd" ? 0.68 : 0.56;
         let jpegQuality = qualityMode === "hd" ? 0.9 : 0.82;
+        let source: CanvasImageSource;
+        let sourceWidth = 0;
+        let sourceHeight = 0;
+        let cleanupSource = () => undefined;
 
-        const source = await new Promise<HTMLImageElement>((resolve, reject) => {
-          const element = new window.Image();
-          const objectUrl = URL.createObjectURL(file);
-          element.onload = () => {
-            URL.revokeObjectURL(objectUrl);
-            resolve(element);
+        if (typeof window.createImageBitmap === "function") {
+          const bitmap = await window.createImageBitmap(file);
+          source = bitmap;
+          sourceWidth = bitmap.width;
+          sourceHeight = bitmap.height;
+          cleanupSource = () => {
+            bitmap.close();
           };
-          element.onerror = (err) => {
-            URL.revokeObjectURL(objectUrl);
-            reject(err);
+        } else {
+          const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+            const element = new window.Image();
+            const objectUrl = URL.createObjectURL(file);
+            element.onload = () => {
+              URL.revokeObjectURL(objectUrl);
+              resolve(element);
+            };
+            element.onerror = (err) => {
+              URL.revokeObjectURL(objectUrl);
+              reject(err);
+            };
+            element.src = objectUrl;
+          });
+          source = image;
+          sourceWidth = image.naturalWidth || image.width;
+          sourceHeight = image.naturalHeight || image.height;
+          cleanupSource = () => {
+            image.src = "";
           };
-          element.src = objectUrl;
-        });
+        }
 
         const canvas = document.createElement("canvas");
         const ctx = canvas.getContext("2d", { alpha: false });
@@ -555,8 +580,8 @@ export function ChatLayout({
         ctx.imageSmoothingQuality = "high";
 
         try {
-          let width = source.naturalWidth || source.width;
-          let height = source.naturalHeight || source.height;
+          let width = sourceWidth;
+          let height = sourceHeight;
           const longSide = Math.max(width, height);
           if (longSide > maxDimension) {
             const ratio = maxDimension / longSide;
@@ -607,19 +632,23 @@ export function ChatLayout({
           ctx.clearRect(0, 0, canvas.width, canvas.height);
           canvas.width = 0;
           canvas.height = 0;
-          source.src = "";
+          cleanupSource();
         }
       }),
     [runCompressionExclusive, toMb, wait]
   );
 
   const uploadToCloudinary = useCallback(
-    async (file: File): Promise<string | null> =>
+    async (file: File, options?: UploadRequestOptions): Promise<string | null> =>
       queueUpload(file.name, async () => {
         try {
           const presetName = "chat_upload";
           const retryBackoffMs = [500, 1500, 3000];
           const maxAttempts = retryBackoffMs.length + 1;
+          const shouldAvoidCompression =
+            Boolean(options?.preferLowMemory) ||
+            isLowMemoryMode ||
+            options?.source === "camera";
 
           console.log(
             `[UPLOAD] start name=${file.name} type=${file.type} original=${toMb(file.size)}MB quality=${uploadQuality}`
@@ -635,7 +664,7 @@ export function ChatLayout({
           await waitForVisible();
 
           let fileToUpload: File | Blob = file;
-          if (file.type.startsWith("image/") && file.size > 1024 * 1024) {
+          if (file.type.startsWith("image/") && file.size > 1024 * 1024 && !shouldAvoidCompression) {
             emitUploadProgress({
               fileName: file.name,
               stage: "compressing",
@@ -648,6 +677,8 @@ export function ChatLayout({
               stage: "compressing",
               progress: 42,
             });
+          } else if (file.type.startsWith("image/") && shouldAvoidCompression) {
+            console.log("[UPLOAD] skipped client compression due to low-memory preference");
           } else if (file.type.startsWith("video/")) {
             const maxVideoBytes = uploadQuality === "hd" ? 80 * 1024 * 1024 : 60 * 1024 * 1024;
             if (file.size > maxVideoBytes) {
@@ -753,54 +784,104 @@ export function ChatLayout({
           return null;
         }
       }),
-    [queueUpload, toMb, uploadQuality, emitUploadProgress, waitForOnline, waitForVisible, compressImage, wait, toast, emitMobileEvent]
+    [
+      queueUpload,
+      isLowMemoryMode,
+      toMb,
+      uploadQuality,
+      emitUploadProgress,
+      waitForOnline,
+      waitForVisible,
+      compressImage,
+      wait,
+      toast,
+      emitMobileEvent,
+    ]
   );
 
   const handleCamera = useCallback(() => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*';
-    input.capture = 'environment';
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.capture = "environment";
+    input.style.display = "none";
+    document.body.appendChild(input);
+
+    let cleanupTimer = 0;
+    const cleanup = () => {
+      if (cleanupTimer) {
+        window.clearTimeout(cleanupTimer);
+      }
+      input.onchange = null;
+      input.value = "";
+      if (input.parentNode) {
+        input.parentNode.removeChild(input);
+      }
+    };
+
+    cleanupTimer = window.setTimeout(cleanup, 60_000);
+
     input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        toast({ title: 'Uploading image...' });
-        const url = await uploadToCloudinary(file);
+      try {
+        const file = (e.target as HTMLInputElement).files?.[0];
+        if (!file) return;
+        toast({ title: "Uploading image..." });
+        const url = await uploadToCloudinary(file, { source: "camera", preferLowMemory: true });
         if (url) {
-          sendMessage({ type: 'image', mediaUrl: url, text: '' });
+          sendMessage({ type: "image", mediaUrl: url, text: "" });
           // Scroll to bottom after sending camera image
           requestAnimationFrame(() => {
             scrollToBottom();
           });
         }
+      } finally {
+        cleanup();
       }
     };
+    input.addEventListener("cancel", cleanup, { once: true });
+
     input.click();
     setShowMediaOptions(false);
   }, [sendMessage, uploadToCloudinary, toast, scrollToBottom]);
 
   const handleGallery = useCallback(() => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/*,video/*';
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*,video/*";
     input.multiple = true;
+    input.style.display = "none";
+    document.body.appendChild(input);
+
+    const cleanup = () => {
+      input.onchange = null;
+      input.value = "";
+      if (input.parentNode) {
+        input.parentNode.removeChild(input);
+      }
+    };
+
     input.onchange = async (e) => {
-      const files = (e.target as HTMLInputElement).files;
-      if (files && files.length > 0) {
+      try {
+        const files = (e.target as HTMLInputElement).files;
+        if (!files || files.length === 0) return;
         toast({ title: `Uploading ${files.length} file(s)...` });
         for (const file of Array.from(files)) {
-          const url = await uploadToCloudinary(file);
+          const url = await uploadToCloudinary(file, { source: "gallery" });
           if (!url) continue;
-          const type = file.type.startsWith('image/') ? 'image' : 'video';
-          sendMessage({ type, mediaUrl: url, text: '' });
+          const type = file.type.startsWith("image/") ? "image" : "video";
+          sendMessage({ type, mediaUrl: url, text: "" });
           await wait(0);
         }
         // Scroll to bottom after sending gallery media
         requestAnimationFrame(() => {
           scrollToBottom();
         });
+      } finally {
+        cleanup();
       }
     };
+    input.addEventListener("cancel", cleanup, { once: true });
+
     input.click();
     setShowMediaOptions(false);
   }, [sendMessage, uploadToCloudinary, toast, scrollToBottom, wait]);
