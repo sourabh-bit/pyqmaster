@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff, Video, VideoOff, PhoneOff, RotateCcw } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
@@ -32,8 +32,22 @@ export function ActiveCallOverlay({
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const [duration, setDuration] = useState(0);
   const [showLocalVideo, setShowLocalVideo] = useState(true);
+  const [lastRemoteFrame, setLastRemoteFrame] = useState<string | null>(null);
 
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
+
+  const captureRemoteFrame = useCallback(() => {
+    const video = remoteVideoRef.current;
+    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+    const canvas = document.createElement("canvas");
+    const scale = Math.min(1, 640 / video.videoWidth);
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    setLastRemoteFrame(canvas.toDataURL("image/jpeg", 0.65));
+  }, []);
 
   useEffect(() => {
     if (localVideoRef.current && localStream) {
@@ -56,8 +70,38 @@ export function ActiveCallOverlay({
         remoteAudioRef.current.volume = 1;
         remoteAudioRef.current.play().catch(console.error);
       }
+
+      const audioTracks = remoteStream.getAudioTracks();
+      const resumeAudio = () => {
+        remoteAudioRef.current?.play().catch(() => {});
+      };
+      audioTracks.forEach((track) => {
+        track.onunmute = resumeAudio;
+      });
+
+      const videoEl = remoteVideoRef.current;
+      const captureOnChange = () => captureRemoteFrame();
+      const captureTimer = window.setInterval(() => {
+        if (videoEl && !videoEl.paused && !videoEl.ended) {
+          captureRemoteFrame();
+        }
+      }, 1500);
+      videoEl?.addEventListener("playing", captureOnChange);
+      videoEl?.addEventListener("pause", captureOnChange);
+      videoEl?.addEventListener("stalled", captureOnChange);
+
+      return () => {
+        window.clearInterval(captureTimer);
+        videoEl?.removeEventListener("playing", captureOnChange);
+        videoEl?.removeEventListener("pause", captureOnChange);
+        videoEl?.removeEventListener("stalled", captureOnChange);
+        audioTracks.forEach((track) => {
+          track.onunmute = null;
+        });
+      };
     }
-  }, [remoteStream]);
+    return undefined;
+  }, [captureRemoteFrame, remoteStream]);
 
   useEffect(() => {
     const timer = setInterval(() => setDuration(d => d + 1), 1000);
@@ -86,6 +130,13 @@ export function ActiveCallOverlay({
             playsInline
             className="w-full h-full object-contain bg-black"
           />
+        ) : remoteStream && lastRemoteFrame ? (
+          <div className="relative w-full h-full bg-black flex items-center justify-center">
+            <img src={lastRemoteFrame} alt="Last remote frame" className="w-full h-full object-contain" />
+            <div className="absolute inset-0 bg-black/25 flex items-end justify-center pb-24">
+              <p className="text-white/80 text-sm sm:text-base">Reconnecting video...</p>
+            </div>
+          </div>
         ) : remoteStream ? (
           <div className="flex flex-col items-center px-4">
             <Avatar className="w-28 h-28 sm:w-36 sm:h-36 border-4 border-white/20 mb-6">
@@ -96,7 +147,6 @@ export function ActiveCallOverlay({
             </Avatar>
             <p className="text-white text-xl font-medium">{peerName}</p>
             <p className="text-green-400 font-mono text-lg mt-2">{formatDuration(duration)}</p>
-            <audio ref={remoteVideoRef as any} autoPlay playsInline />
           </div>
         ) : (
           <div className="flex flex-col items-center px-4">

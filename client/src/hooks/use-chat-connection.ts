@@ -17,6 +17,15 @@ interface Message {
   };
 }
 
+interface HistoryBatch {
+  messages: Message[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+const INITIAL_HISTORY_PAGE_SIZE = 120;
+const OLDER_HISTORY_PAGE_SIZE = 100;
+
 interface UserProfile {
   name: string;
   avatar: string;
@@ -24,7 +33,19 @@ interface UserProfile {
   isTyping: boolean;
 }
 
+type VideoProfile = "hd" | "sd" | "audio-priority";
+
+interface CallStatsSnapshot {
+  bytesSent: number;
+  timestamp: number;
+  framesEncoded: number;
+  framesDropped: number;
+}
+
+type CandidateRoute = "host" | "srflx" | "relay" | "unknown";
+
 const FIXED_ROOM_ID = 'secure-room-001';
+const OFFLINE_QUEUE_LIMIT = 200;
 
 // Fetch user profile from server (source of truth)
 const fetchServerProfile = async (userType: 'admin' | 'friend'): Promise<{ name: string; avatar: string } | null> => {
@@ -59,22 +80,41 @@ const saveServerProfile = async (userType: 'admin' | 'friend', name: string, ava
   return false;
 };
 
-const fetchChatHistory = async (userType: 'admin' | 'friend'): Promise<Message[]> => {
+const fetchChatHistory = async (
+  userType: 'admin' | 'friend',
+  cursor: string | null = null,
+  limit = INITIAL_HISTORY_PAGE_SIZE
+): Promise<HistoryBatch> => {
   try {
-    const response = await fetch(`/api/messages/${FIXED_ROOM_ID}?userType=${userType}`);
+    const params = new URLSearchParams({
+      userType,
+      limit: String(limit),
+    });
+    if (cursor) {
+      params.set("cursor", cursor);
+    }
+    const response = await fetch(`/api/messages/${FIXED_ROOM_ID}?${params.toString()}`);
       if (response.ok) {
         const data = await response.json();
         if (data.messages && Array.isArray(data.messages)) {
-          return data.messages.map((m: any) => ({
-            ...m,
-            timestamp: new Date(m.timestamp)
-        }));
+          return {
+            messages: normalizeHistoryMessages(data.messages),
+            nextCursor: typeof data.nextCursor === "string" ? data.nextCursor : null,
+            hasMore: Boolean(data.hasMore),
+          };
+        }
       }
-    }
   } catch (error) {
     console.error('Failed to fetch chat history:', error);
   }
-  return [];
+  return { messages: [], nextCursor: null, hasMore: false };
+};
+
+const normalizeHistoryMessages = (input: any[]): Message[] => {
+  return input.map((m: any) => ({
+            ...m,
+            timestamp: new Date(m.timestamp),
+          }));
 };
 
 const ICE_SERVERS = {
@@ -104,12 +144,27 @@ const ICE_SERVERS = {
   iceCandidatePoolSize: 10
 };
 
+const buildRtcConfig = (forceRelay: boolean): RTCConfiguration => ({
+  ...ICE_SERVERS,
+  iceTransportPolicy: forceRelay ? "relay" : "all"
+});
+
 let swRegistration: ServiceWorkerRegistration | null = null;
 
 const registerServiceWorker = async () => {
+  const isDevelopment =
+    import.meta.env.DEV ||
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1";
+  if (isDevelopment) {
+    return null;
+  }
+
   if ('serviceWorker' in navigator) {
     try {
-      swRegistration = await navigator.serviceWorker.register('/sw.js');
+      swRegistration =
+        (await navigator.serviceWorker.getRegistration("/sw.js")) ||
+        (await navigator.serviceWorker.register('/sw.js'));
       return swRegistration;
     } catch (err) {
       console.log('Service Worker registration failed:', err);
@@ -288,6 +343,12 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   
   const [isLoadingProfiles, setIsLoadingProfiles] = useState(true);
 
+  // Reconnection state with exponential backoff
+  const reconnectAttempts = useRef(0);
+  const maxReconnectAttempts = useRef(10);
+  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastHeartbeatRef = useRef<number>(Date.now());
+
   useEffect(() => {
     if (userType === 'admin') {
       requestNotificationPermission(userType);
@@ -346,6 +407,8 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   // localStorage is only used as a cache, not as initial state
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(true);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [isLoadingOlderHistory, setIsLoadingOlderHistory] = useState(false);
 
   const [activeCall, setActiveCall] = useState<'voice' | 'video' | null>(null);
   const [incomingCall, setIncomingCall] = useState<{
@@ -364,12 +427,49 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
+  const isMakingOfferRef = useRef(false);
+  const isRecoveringRef = useRef(false);
+  const recoveryAttemptsRef = useRef(0);
+  const forceRelayRef = useRef(false);
+  const pendingRecoveryReasonRef = useRef<string | null>(null);
+  const mediaRequestRef = useRef<Promise<MediaStream> | null>(null);
+  const iceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const callStatsIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectCallTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const currentVideoProfileRef = useRef<VideoProfile>("hd");
+  const lastStatsRef = useRef<CallStatsSnapshot | null>(null);
+  const lastCandidatePairIdRef = useRef<string>("");
+  const lastInterfaceKeyRef = useRef<string>("");
+  const selectedRouteRef = useRef<CandidateRoute>("unknown");
+  const incomingCallSessionIdRef = useRef<string | null>(null);
+  const callSessionIdRef = useRef<string | null>(null);
+  const intentionalCallEndRef = useRef(false);
+  const isPolitePeerRef = useRef(userType === "friend");
+  const callEndLoggedRef = useRef(false);
+  const callStartedAtRef = useRef<number | null>(null);
+  const lastIceRestartAtRef = useRef(0);
+  const handoffCooldownUntilRef = useRef(0);
+  const qualityDowngradeStreakRef = useRef(0);
+  const qualityUpgradeStreakRef = useRef(0);
+  const statsTickRef = useRef(0);
+  const relayStartedAtRef = useRef<number | null>(null);
+  const relayUsageCountRef = useRef(0);
+  const relayTotalDurationMsRef = useRef(0);
+  const backgroundVideoSuspendTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const videoSenderDetachedRef = useRef(false);
+  const videoSenderRef = useRef<RTCRtpSender | null>(null);
+  const lastRemoteOfferSdpRef = useRef("");
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectBlockedUntilRef = useRef(0);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastTypingSentAtRef = useRef(0);
   const currentCallType = useRef<'voice' | 'video' | null>(null);
   const processedMessageIds = useRef<Set<string>>(new Set());
   const isDocumentVisible = useRef<boolean>(!document.hidden);
   const offlineQueue = useRef<any[]>([]);
+  const isIntentionalClose = useRef(false);
+  const handleMessageRef = useRef<(data: any) => Promise<void>>(async () => {});
+  const scheduleIceRecoveryRef = useRef<(reason: string) => void>(() => {});
 
   const deviceId = useRef<string>(
     localStorage.getItem('device_id') ||
@@ -392,6 +492,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const peerProfileRef = useRef(peerProfile);
   const messagesRef = useRef(messages);
   const peerConnectedRef = useRef(peerConnected);
+  const historyCursorRef = useRef<string | null>(null);
 
   useEffect(() => {
     myProfileRef.current = myProfile;
@@ -408,6 +509,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   useEffect(() => {
     peerConnectedRef.current = peerConnected;
   }, [peerConnected]);
+
+  useEffect(() => {
+    isPolitePeerRef.current = userType === 'friend';
+  }, [userType]);
 
   // Trigger a read receipt for a single message if chat is visible
   function tryMarkAsRead(message: Message) {
@@ -432,10 +537,28 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(
-      `chat_messages_${userType}`,
-      JSON.stringify(messages)
-    );
+    let cancelled = false;
+    const key = `chat_messages_${userType}`;
+    const persist = () => {
+      if (cancelled) return;
+      localStorage.setItem(key, JSON.stringify(messages));
+    };
+
+    if (typeof (window as any).requestIdleCallback === "function") {
+      const idleId = (window as any).requestIdleCallback(persist, { timeout: 1200 });
+      return () => {
+        cancelled = true;
+        if (typeof (window as any).cancelIdleCallback === "function") {
+          (window as any).cancelIdleCallback(idleId);
+        }
+      };
+    }
+
+    const timer = window.setTimeout(persist, 120);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [messages, userType]);
 
   useEffect(() => {
@@ -475,23 +598,147 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     return `${WS_URL}/ws`;
   };
 
+  const offlineQueueStorageKey = `chat_offline_queue_${userType}`;
+
+  const persistOfflineQueue = useCallback(() => {
+    if (offlineQueue.current.length === 0) {
+      localStorage.removeItem(offlineQueueStorageKey);
+      return;
+    }
+    try {
+      localStorage.setItem(
+        offlineQueueStorageKey,
+        JSON.stringify(offlineQueue.current.slice(-OFFLINE_QUEUE_LIMIT))
+      );
+    } catch (err) {
+      console.warn("[WS] failed to persist offline queue", err);
+    }
+  }, [offlineQueueStorageKey]);
+
+  const enqueueOfflinePayload = useCallback((payload: any) => {
+    if (payload.type === "send-message" && payload.id) {
+      const exists = offlineQueue.current.some(
+        (queued) => queued.type === "send-message" && queued.id === payload.id
+      );
+      if (exists) return;
+    }
+    offlineQueue.current.push(payload);
+    if (offlineQueue.current.length > OFFLINE_QUEUE_LIMIT) {
+      offlineQueue.current = offlineQueue.current.slice(-OFFLINE_QUEUE_LIMIT);
+    }
+    persistOfflineQueue();
+  }, [persistOfflineQueue]);
+
+  const emitAppEvent = useCallback((event: string, detail: Record<string, any> = {}) => {
+    const payload = {
+      event,
+      at: new Date().toISOString(),
+      userType,
+      ...detail
+    };
+    console.log("[APP_EVT]", JSON.stringify(payload));
+    try {
+      window.dispatchEvent(new CustomEvent("chat:app-event", { detail: payload }));
+    } catch {
+      // ignore event dispatch failures
+    }
+  }, [userType]);
+
   const sendSignal = useCallback((data: any, queueIfOffline = false) => {
     const payload = { ...data, roomId: FIXED_ROOM_ID };
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(payload));
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify(payload));
+      } catch (err) {
+        if (queueIfOffline) {
+          enqueueOfflinePayload(payload);
+          if (payload.type === "send-message") {
+            emitAppEvent("message_retry", { reason: "send-throw", messageId: payload.id });
+          }
+        }
+      }
     } else if (queueIfOffline) {
-      offlineQueue.current.push(payload);
+      enqueueOfflinePayload(payload);
+      if (payload.type === "send-message") {
+        emitAppEvent("message_retry", { reason: "socket-offline", messageId: payload.id });
+      }
     }
-  }, []);
+  }, [enqueueOfflinePayload, emitAppEvent]);
 
   const flushOfflineQueue = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN && offlineQueue.current.length > 0) {
-      offlineQueue.current.forEach((payload) => {
-        wsRef.current!.send(JSON.stringify(payload));
-      });
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || offlineQueue.current.length === 0) return;
+
+    while (offlineQueue.current.length > 0 && ws.readyState === WebSocket.OPEN) {
+      const payload = offlineQueue.current[0];
+      try {
+        ws.send(JSON.stringify(payload));
+        if (payload.type === "send-message") {
+          emitAppEvent("message_retry", { reason: "flushed", messageId: payload.id });
+        }
+        offlineQueue.current.shift();
+      } catch {
+        break;
+      }
+    }
+
+    persistOfflineQueue();
+  }, [persistOfflineQueue, emitAppEvent]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(offlineQueueStorageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        offlineQueue.current = parsed.slice(-OFFLINE_QUEUE_LIMIT);
+      }
+    } catch (err) {
+      console.warn("[WS] failed to load offline queue", err);
       offlineQueue.current = [];
     }
+  }, [offlineQueueStorageKey]);
+
+  const createCallSessionId = useCallback(
+    () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    []
+  );
+
+  const matchesActiveCallSession = useCallback((incomingSessionId?: string) => {
+    if (!incomingSessionId) return true;
+    const activeSession = callSessionIdRef.current || incomingCallSessionIdRef.current;
+    if (!activeSession) return true;
+    return incomingSessionId === activeSession;
   }, []);
+
+  const sendCallSignal = useCallback((data: any, queueIfOffline = false) => {
+    const activeSession = callSessionIdRef.current || incomingCallSessionIdRef.current;
+    sendSignal(
+      {
+        ...data,
+        callSessionId: activeSession || undefined
+      },
+      queueIfOffline
+    );
+  }, [sendSignal]);
+
+  const emitCallTelemetry = useCallback((event: string, detail: Record<string, any> = {}) => {
+    const payload = {
+      event,
+      at: new Date().toISOString(),
+      userType,
+      sessionId: callSessionIdRef.current || incomingCallSessionIdRef.current || null,
+      callType: currentCallType.current,
+      ...detail
+    };
+    console.log("[WEBRTC_EVT]", JSON.stringify(payload));
+    try {
+      window.dispatchEvent(new CustomEvent("chat:call-telemetry", { detail: payload }));
+    } catch {
+      // ignore CustomEvent dispatch errors in unsupported contexts
+    }
+  }, [userType]);
 
   const updateMyProfile = useCallback(async (updates: Partial<UserProfile>) => {
     const newProfile = { ...myProfile, ...updates };
@@ -511,14 +758,82 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     }
   }, [myProfile, userType, sendSignal]);
 
-  const cleanupCall = useCallback(() => {
+  const clearCallTimers = useCallback(() => {
+    if (iceTimeoutRef.current) {
+      clearTimeout(iceTimeoutRef.current);
+      iceTimeoutRef.current = null;
+    }
+    if (callStatsIntervalRef.current) {
+      clearInterval(callStatsIntervalRef.current);
+      callStatsIntervalRef.current = null;
+    }
+    if (reconnectCallTimeoutRef.current) {
+      clearTimeout(reconnectCallTimeoutRef.current);
+      reconnectCallTimeoutRef.current = null;
+    }
+    if (backgroundVideoSuspendTimeoutRef.current) {
+      clearTimeout(backgroundVideoSuspendTimeoutRef.current);
+      backgroundVideoSuspendTimeoutRef.current = null;
+    }
+  }, []);
+
+  const cleanupCall = useCallback((preserveSession = false, endReason = "unknown") => {
+    const hadActiveSession = Boolean(callSessionIdRef.current || incomingCallSessionIdRef.current);
+    const durationMs =
+      callStartedAtRef.current != null ? Date.now() - callStartedAtRef.current : null;
+    if (relayStartedAtRef.current) {
+      relayTotalDurationMsRef.current += Date.now() - relayStartedAtRef.current;
+      relayStartedAtRef.current = null;
+    }
+    if (hadActiveSession && !callEndLoggedRef.current) {
+      emitCallTelemetry("call_end_reason", {
+        reason: endReason,
+        durationMs,
+        relayUsageCount: relayUsageCountRef.current,
+        relayTotalDurationMs: relayTotalDurationMsRef.current
+      });
+      callEndLoggedRef.current = true;
+    }
+
+    clearCallTimers();
+    isMakingOfferRef.current = false;
+    isRecoveringRef.current = false;
+    recoveryAttemptsRef.current = 0;
+    pendingRecoveryReasonRef.current = null;
+    pendingCandidates.current = [];
+    lastStatsRef.current = null;
+    lastCandidatePairIdRef.current = "";
+    lastInterfaceKeyRef.current = "";
+    selectedRouteRef.current = "unknown";
+    mediaRequestRef.current = null;
+    forceRelayRef.current = false;
+    videoSenderDetachedRef.current = false;
+    videoSenderRef.current = null;
+    lastRemoteOfferSdpRef.current = "";
+    lastIceRestartAtRef.current = 0;
+    handoffCooldownUntilRef.current = 0;
+    qualityDowngradeStreakRef.current = 0;
+    qualityUpgradeStreakRef.current = 0;
+    statsTickRef.current = 0;
+    callStartedAtRef.current = null;
+    relayUsageCountRef.current = 0;
+    relayTotalDurationMsRef.current = 0;
+    currentVideoProfileRef.current = "hd";
+
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => {
         track.stop();
       });
+      localStreamRef.current = null;
     }
 
     if (peerRef.current) {
+      try {
+        peerRef.current.onicecandidate = null;
+        peerRef.current.ontrack = null;
+        peerRef.current.onconnectionstatechange = null;
+        peerRef.current.oniceconnectionstatechange = null;
+      } catch {}
       peerRef.current.close();
       peerRef.current = null;
     }
@@ -531,10 +846,15 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     setIsMuted(false);
     setIsVideoOff(false);
     currentCallType.current = null;
-    pendingCandidates.current = [];
-  }, []);
+    incomingCallSessionIdRef.current = null;
+    if (!preserveSession) {
+      callSessionIdRef.current = null;
+    }
+  }, [clearCallTimers, emitCallTelemetry]);
 
-  const getMediaConstraints = (mode: 'voice' | 'video') => {
+  const getMediaConstraints = useCallback((mode: 'voice' | 'video', profile: VideoProfile = currentVideoProfileRef.current) => {
+    const isSd = profile === "sd";
+    const isAudioPriority = profile === "audio-priority";
     return {
       audio: {
         echoCancellation: { ideal: true },
@@ -547,36 +867,426 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       video:
         mode === 'video'
           ? {
-              width: { ideal: 1280, max: 1920 },
-              height: { ideal: 720, max: 1080 },
-              frameRate: { ideal: 30, max: 30 },
+              width: {
+                ideal: isAudioPriority ? 320 : isSd ? 854 : 1280,
+                max: isAudioPriority ? 640 : isSd ? 1280 : 1920
+              },
+              height: {
+                ideal: isAudioPriority ? 180 : isSd ? 480 : 720,
+                max: isAudioPriority ? 360 : isSd ? 720 : 1080
+              },
+              frameRate: {
+                ideal: isAudioPriority ? 8 : isSd ? 15 : 24,
+                max: isAudioPriority ? 12 : isSd ? 18 : 30
+              },
               facingMode: 'user'
             }
           : false
     };
-  };
+  }, []);
 
-  const createPeerConnection = useCallback((stream: MediaStream) => {
-    const peer = new RTCPeerConnection(ICE_SERVERS);
+  const ensureLocalStream = useCallback(async (mode: 'voice' | 'video'): Promise<MediaStream> => {
+    const existing = localStreamRef.current;
+    if (existing) {
+      const hasLiveAudio = existing.getAudioTracks().some(t => t.readyState === "live");
+      const hasLiveVideo = existing.getVideoTracks().some(t => t.readyState === "live");
+      if (hasLiveAudio && (mode === 'voice' || hasLiveVideo)) {
+        return existing;
+      }
+    }
+
+    if (mediaRequestRef.current) {
+      return mediaRequestRef.current;
+    }
+
+    const request = navigator.mediaDevices
+      .getUserMedia(getMediaConstraints(mode))
+      .then((stream) => {
+        if (localStreamRef.current && localStreamRef.current !== stream) {
+          localStreamRef.current.getTracks().forEach((track) => track.stop());
+        }
+        localStreamRef.current = stream;
+        setLocalStream(stream);
+        return stream;
+      })
+      .finally(() => {
+        mediaRequestRef.current = null;
+      });
+
+    mediaRequestRef.current = request;
+    return request;
+  }, [getMediaConstraints]);
+
+  const applyVideoProfile = useCallback(async (profile: VideoProfile, reason = "adaptive") => {
+    if (currentCallType.current !== 'video') return;
+    if (currentVideoProfileRef.current === profile) return;
+    const from = currentVideoProfileRef.current;
+    const track = localStreamRef.current?.getVideoTracks()[0];
+    if (!track || track.readyState !== "live") return;
+    try {
+      await track.applyConstraints(getMediaConstraints('video', profile).video as MediaTrackConstraints);
+      currentVideoProfileRef.current = profile;
+      console.log(`[WEBRTC] Applied video profile=${profile}`);
+      emitCallTelemetry("quality_change", { from, to: profile, reason });
+    } catch (err) {
+      console.warn('[WEBRTC] Failed to apply video profile', err);
+    }
+  }, [getMediaConstraints, emitCallTelemetry]);
+
+  const flushPendingCandidates = useCallback(async (peer: RTCPeerConnection) => {
+    for (const candidate of pendingCandidates.current) {
+      try {
+        await peer.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.error('Error adding pending candidate:', e);
+      }
+    }
+    pendingCandidates.current = [];
+  }, []);
+
+  const startCallStatsMonitor = useCallback((peer: RTCPeerConnection) => {
+    if (callStatsIntervalRef.current) {
+      clearInterval(callStatsIntervalRef.current);
+    }
+
+    const profileRank: Record<VideoProfile, number> = {
+      "audio-priority": 0,
+      sd: 1,
+      hd: 2
+    };
+
+    callStatsIntervalRef.current = setInterval(async () => {
+      try {
+        if (peerRef.current !== peer) return;
+        if (document.hidden) return;
+        statsTickRef.current += 1;
+        const stats = await peer.getStats();
+
+        let selectedPair: any = null;
+        let outboundVideo: any = null;
+        let inboundVideo: any = null;
+        let inboundAudio: any = null;
+        stats.forEach((report: any) => {
+          if (report.type === 'candidate-pair' && report.state === 'succeeded' && (report.selected || report.nominated)) {
+            selectedPair = report;
+          }
+          if (report.type === 'outbound-rtp' && report.kind === 'video' && !report.isRemote) {
+            outboundVideo = report;
+          }
+          if (report.type === 'inbound-rtp' && report.kind === 'video' && !report.isRemote) {
+            inboundVideo = report;
+          }
+          if (report.type === 'inbound-rtp' && report.kind === 'audio' && !report.isRemote) {
+            inboundAudio = report;
+          }
+        });
+
+        let route: CandidateRoute = "unknown";
+        let availableBitrateKbps = 0;
+        let rttMs = 0;
+        if (selectedPair) {
+          const pair = selectedPair as any;
+          const localCandidate = pair.localCandidateId ? stats.get(pair.localCandidateId as string) as any : null;
+          const remoteCandidate = pair.remoteCandidateId ? stats.get(pair.remoteCandidateId as string) as any : null;
+          const localType = localCandidate?.candidateType as CandidateRoute | undefined;
+          const remoteType = remoteCandidate?.candidateType as CandidateRoute | undefined;
+
+          route =
+            localType === "relay" || remoteType === "relay"
+              ? "relay"
+              : localType === "srflx" || remoteType === "srflx"
+              ? "srflx"
+              : localType === "host" || remoteType === "host"
+              ? "host"
+              : "unknown";
+
+          const localAddress = localCandidate?.address || localCandidate?.ip || "unknown";
+          const localNetworkType = localCandidate?.networkType || "unknown";
+          const localProtocol = localCandidate?.protocol || "unknown";
+          const interfaceKey = `${localNetworkType}:${localAddress}:${localProtocol}:${localType || "unknown"}`;
+
+          if (lastCandidatePairIdRef.current !== pair.id) {
+            console.log(
+              `[WEBRTC] selected candidate local=${localType || 'unknown'} remote=${remoteType || 'unknown'} protocol=${localProtocol}`
+            );
+            lastCandidatePairIdRef.current = pair.id;
+          }
+
+          if (route === "relay" && selectedRouteRef.current !== "relay") {
+            relayStartedAtRef.current = Date.now();
+            relayUsageCountRef.current += 1;
+            emitCallTelemetry("relay_entered", {
+              localType: localType || "unknown",
+              remoteType: remoteType || "unknown",
+              count: relayUsageCountRef.current
+            });
+          } else if (route !== "relay" && selectedRouteRef.current === "relay" && relayStartedAtRef.current) {
+            relayTotalDurationMsRef.current += Date.now() - relayStartedAtRef.current;
+            relayStartedAtRef.current = null;
+          }
+          selectedRouteRef.current = route;
+
+          const handoffDetected =
+            Boolean(lastInterfaceKeyRef.current) &&
+            interfaceKey !== lastInterfaceKeyRef.current &&
+            route !== "relay" &&
+            Date.now() > handoffCooldownUntilRef.current;
+          if (handoffDetected) {
+            handoffCooldownUntilRef.current = Date.now() + 20000;
+            emitCallTelemetry("network_handoff", {
+              from: lastInterfaceKeyRef.current,
+              to: interfaceKey,
+              route
+            });
+            scheduleIceRecoveryRef.current("network-handoff");
+          }
+          lastInterfaceKeyRef.current = interfaceKey;
+
+          if (pair.availableOutgoingBitrate) {
+            availableBitrateKbps = Math.round(pair.availableOutgoingBitrate / 1000);
+          }
+          if (pair.currentRoundTripTime) {
+            rttMs = Math.round(pair.currentRoundTripTime * 1000);
+          }
+        }
+
+        let bitrateKbps = 0;
+        let packetLossRate = 0;
+        let frameDropRate = 0;
+        let jitterMs = 0;
+        if (outboundVideo) {
+          if (lastStatsRef.current && outboundVideo.timestamp > lastStatsRef.current.timestamp) {
+            const bytesDiff = (outboundVideo.bytesSent || 0) - lastStatsRef.current.bytesSent;
+            const timeDiffSec = (outboundVideo.timestamp - lastStatsRef.current.timestamp) / 1000;
+            bitrateKbps = timeDiffSec > 0 ? Math.round((bytesDiff * 8) / 1000 / timeDiffSec) : 0;
+
+            const frameDropDiff = (outboundVideo.framesDropped || 0) - lastStatsRef.current.framesDropped;
+            const frameEncodedDiff = (outboundVideo.framesEncoded || 0) - lastStatsRef.current.framesEncoded;
+            const totalFrameDiff = Math.max(1, frameDropDiff + frameEncodedDiff);
+            frameDropRate = frameDropDiff > 0 ? frameDropDiff / totalFrameDiff : 0;
+          }
+          lastStatsRef.current = {
+            bytesSent: outboundVideo.bytesSent || 0,
+            timestamp: outboundVideo.timestamp || Date.now(),
+            framesEncoded: outboundVideo.framesEncoded || 0,
+            framesDropped: outboundVideo.framesDropped || 0
+          };
+        }
+        if (inboundVideo) {
+          const lost = inboundVideo.packetsLost || 0;
+          const received = inboundVideo.packetsReceived || 0;
+          const total = lost + received;
+          packetLossRate = total > 0 ? lost / total : 0;
+          if (!rttMs && inboundVideo.roundTripTime) {
+            rttMs = Math.round(inboundVideo.roundTripTime * 1000);
+          }
+          if (inboundVideo.jitter) {
+            jitterMs = Math.round(inboundVideo.jitter * 1000);
+          }
+        }
+        if (inboundAudio?.jitter) {
+          jitterMs = Math.max(jitterMs, Math.round(inboundAudio.jitter * 1000));
+        }
+
+        if (bitrateKbps > 0 || packetLossRate > 0 || rttMs > 0 || jitterMs > 0) {
+          console.log(
+            `[WEBRTC] stats bitrate=${bitrateKbps}kbps avail=${availableBitrateKbps}kbps rtt=${rttMs}ms jitter=${jitterMs}ms packetLoss=${(packetLossRate * 100).toFixed(1)}% frameDrop=${(frameDropRate * 100).toFixed(1)}% route=${route}`
+          );
+        }
+
+        if (currentCallType.current === 'video') {
+          let desired: VideoProfile = "hd";
+          const severeNetwork =
+            packetLossRate >= 0.12 ||
+            rttMs >= 900 ||
+            jitterMs >= 80 ||
+            (availableBitrateKbps > 0 && availableBitrateKbps < 240) ||
+            (bitrateKbps > 0 && bitrateKbps < 180) ||
+            frameDropRate >= 0.2;
+          const moderateNetwork =
+            packetLossRate >= 0.05 ||
+            rttMs >= 450 ||
+            jitterMs >= 45 ||
+            (availableBitrateKbps > 0 && availableBitrateKbps < 900) ||
+            (bitrateKbps > 0 && bitrateKbps < 520) ||
+            frameDropRate >= 0.1;
+
+          if (severeNetwork) desired = "audio-priority";
+          else if (moderateNetwork) desired = "sd";
+
+          const current = currentVideoProfileRef.current;
+          if (desired !== current) {
+            const isDowngrade = profileRank[desired] < profileRank[current];
+            if (isDowngrade) {
+              qualityDowngradeStreakRef.current += 1;
+              qualityUpgradeStreakRef.current = 0;
+              if (qualityDowngradeStreakRef.current >= 2) {
+                qualityDowngradeStreakRef.current = 0;
+                await applyVideoProfile(desired, "stats-downgrade");
+              }
+            } else {
+              qualityUpgradeStreakRef.current += 1;
+              qualityDowngradeStreakRef.current = 0;
+              if (qualityUpgradeStreakRef.current >= 4) {
+                qualityUpgradeStreakRef.current = 0;
+                await applyVideoProfile(desired, "stats-upgrade");
+              }
+            }
+          } else {
+            qualityDowngradeStreakRef.current = 0;
+            qualityUpgradeStreakRef.current = 0;
+          }
+        }
+
+        if (statsTickRef.current % 12 === 0) {
+          peer.getSenders().forEach((sender) => {
+            const senderTrack = sender.track;
+            if (senderTrack && senderTrack.readyState === "ended") {
+              sender.replaceTrack(null).catch(() => {});
+            }
+          });
+          localStreamRef.current?.getTracks().forEach((track) => {
+            if (track.readyState === "ended") {
+              localStreamRef.current?.removeTrack(track);
+            }
+          });
+        }
+      } catch (err) {
+        console.debug('[WEBRTC] stats collection failed', err);
+      }
+    }, 6000);
+  }, [applyVideoProfile, emitCallTelemetry]);
+
+  const scheduleIceRecovery = useCallback((reason: string) => {
+    if (intentionalCallEndRef.current || callStatus === 'idle') return;
+    if (document.hidden) {
+      pendingRecoveryReasonRef.current = reason;
+      return;
+    }
+    if (isRecoveringRef.current) return;
+    if (reconnectCallTimeoutRef.current) clearTimeout(reconnectCallTimeoutRef.current);
+
+    // Relay is already the fallback path; don't keep restarting on route changes.
+    if (
+      selectedRouteRef.current === "relay" &&
+      (reason === "network-handoff" || reason === "network-change")
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastIceRestartAtRef.current < 3000) {
+      return;
+    }
+
+    const delay = Math.min(900 * (recoveryAttemptsRef.current + 1), 3500);
+    reconnectCallTimeoutRef.current = setTimeout(async () => {
+      const peer = peerRef.current;
+      if (!peer || !callSessionIdRef.current || intentionalCallEndRef.current) return;
+      if (peer.signalingState !== 'stable' || isMakingOfferRef.current) {
+        pendingRecoveryReasonRef.current = 'signaling-busy';
+        return;
+      }
+      if (recoveryAttemptsRef.current >= 3) {
+        emitCallTelemetry("recovery_failed", { reason, attempts: recoveryAttemptsRef.current });
+        emitAppEvent("call_recovery", { status: "failed", reason, attempts: recoveryAttemptsRef.current });
+        toast({ variant: 'destructive', title: 'Call connection lost' });
+        cleanupCall(false, "recovery-failed");
+        return;
+      }
+
+      isRecoveringRef.current = true;
+      recoveryAttemptsRef.current += 1;
+      lastIceRestartAtRef.current = Date.now();
+      emitCallTelemetry("ice_restart", { reason, attempt: recoveryAttemptsRef.current });
+      emitAppEvent("call_recovery", { status: "attempt", reason, attempt: recoveryAttemptsRef.current });
+      console.log(`[WEBRTC] attempting ICE recovery reason=${reason} attempt=${recoveryAttemptsRef.current}`);
+
+      try {
+        if (recoveryAttemptsRef.current >= 2 && !forceRelayRef.current) {
+          forceRelayRef.current = true;
+          peer.setConfiguration(buildRtcConfig(true));
+          console.log('[WEBRTC] forcing relay transport for recovery');
+        }
+
+        isMakingOfferRef.current = true;
+        const offer = await peer.createOffer({ iceRestart: true });
+        await peer.setLocalDescription(offer);
+        sendCallSignal({ type: 'offer', sdp: offer, recovery: true }, true);
+
+        if (iceTimeoutRef.current) clearTimeout(iceTimeoutRef.current);
+        iceTimeoutRef.current = setTimeout(() => {
+          const activePeer = peerRef.current;
+          if (!activePeer) return;
+          const state = activePeer.iceConnectionState;
+          if (state !== 'connected' && state !== 'completed') {
+            scheduleIceRecovery('ice-timeout');
+          }
+        }, 10000);
+      } catch (err) {
+        console.error('[WEBRTC] ICE recovery failed', err);
+        emitCallTelemetry("recovery_failed", {
+          reason,
+          attempt: recoveryAttemptsRef.current,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        emitAppEvent("call_recovery", {
+          status: "error",
+          reason,
+          attempt: recoveryAttemptsRef.current
+        });
+        scheduleIceRecovery('restart-failed');
+      } finally {
+        isMakingOfferRef.current = false;
+        isRecoveringRef.current = false;
+      }
+    }, delay);
+  }, [callStatus, toast, cleanupCall, sendCallSignal, emitCallTelemetry, emitAppEvent]);
+
+  useEffect(() => {
+    scheduleIceRecoveryRef.current = scheduleIceRecovery;
+  }, [scheduleIceRecovery]);
+
+  const createPeerConnection = useCallback((stream: MediaStream, recreate = false) => {
+    if (peerRef.current && !recreate) {
+      return peerRef.current;
+    }
+
+    if (peerRef.current && recreate) {
+      try {
+        peerRef.current.close();
+      } catch {}
+      peerRef.current = null;
+    }
+
+    const peer = new RTCPeerConnection(buildRtcConfig(forceRelayRef.current));
+    peerRef.current = peer;
 
     const existingSenders = peer.getSenders();
+    const existingVideoSender = existingSenders.find((s) => s.track?.kind === "video");
+    if (existingVideoSender) {
+      videoSenderRef.current = existingVideoSender;
+    }
     stream.getTracks().forEach((track) => {
       const alreadyAdded = existingSenders.some(s => s.track?.id === track.id);
       if (!alreadyAdded) {
-        peer.addTrack(track, stream);
+        const sender = peer.addTrack(track, stream);
+        if (track.kind === "video") {
+          videoSenderRef.current = sender;
+        }
       }
     });
 
     peer.onicecandidate = (event) => {
       if (event.candidate) {
-        sendSignal({
+        sendCallSignal({
           type: 'ice-candidate',
           candidate: {
             candidate: event.candidate.candidate,
             sdpMLineIndex: event.candidate.sdpMLineIndex,
             sdpMid: event.candidate.sdpMid
           }
-        });
+        }, true);
       }
     };
 
@@ -586,85 +1296,122 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       }
     };
 
-    peer.oniceconnectionstatechange = () => {
-      if (peer.iceConnectionState === 'connected') {
+    peer.onconnectionstatechange = () => {
+      console.log(`[WEBRTC] connectionState=${peer.connectionState}`);
+      if (peer.connectionState === 'connected') {
         setCallStatus('connected');
-      } else if (
-        peer.iceConnectionState === 'disconnected' ||
-        peer.iceConnectionState === 'failed'
-      ) {
-        toast({
-          title: 'Call connection lost',
-          variant: 'destructive'
-        });
-        cleanupCall();
+      }
+      if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') {
+        scheduleIceRecovery(`connection-${peer.connectionState}`);
+      }
+    };
+
+    peer.oniceconnectionstatechange = () => {
+      const state = peer.iceConnectionState;
+      console.log(`[WEBRTC] iceConnectionState=${state}`);
+      if (state === 'connected' || state === 'completed') {
+        const wasRecovering = recoveryAttemptsRef.current > 0 || isRecoveringRef.current;
+        recoveryAttemptsRef.current = 0;
+        pendingRecoveryReasonRef.current = null;
+        if (iceTimeoutRef.current) {
+          clearTimeout(iceTimeoutRef.current);
+          iceTimeoutRef.current = null;
+        }
+        setCallStatus('connected');
+        if (wasRecovering) {
+          emitCallTelemetry("recovery_success", { state });
+          emitAppEvent("call_recovery", { status: "success", state });
+        }
+        startCallStatsMonitor(peer);
+      } else if (state === 'disconnected' || state === 'failed') {
+        scheduleIceRecovery(`ice-${state}`);
       }
     };
 
     return peer;
-  }, [sendSignal, toast, cleanupCall]);
+  }, [scheduleIceRecovery, sendCallSignal, startCallStatsMonitor, emitCallTelemetry, emitAppEvent]);
 
   const initiateWebRTC = useCallback(async (mode: 'voice' | 'video') => {
     try {
-      const constraints = getMediaConstraints(mode);
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-
-      setLocalStream(stream);
-      localStreamRef.current = stream;
-
+      intentionalCallEndRef.current = false;
+      const stream = await ensureLocalStream(mode);
       const peer = createPeerConnection(stream);
-      peerRef.current = peer;
+      if (peer.signalingState !== 'stable' || isMakingOfferRef.current) return;
 
+      isMakingOfferRef.current = true;
       const offer = await peer.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: mode === 'video'
       });
       await peer.setLocalDescription(offer);
-      sendSignal({ type: 'offer', sdp: offer });
-      setCallStatus('connected');
+      sendCallSignal({ type: 'offer', sdp: offer }, true);
+
+      if (iceTimeoutRef.current) clearTimeout(iceTimeoutRef.current);
+      iceTimeoutRef.current = setTimeout(() => {
+        const activePeer = peerRef.current;
+        if (!activePeer) return;
+        const state = activePeer.iceConnectionState;
+        if (state !== 'connected' && state !== 'completed') {
+          scheduleIceRecovery('initial-timeout');
+        }
+      }, 10000);
     } catch (err) {
       console.error('Media error:', err);
       toast({
         variant: 'destructive',
         title: 'Could not access camera/microphone'
       });
-      cleanupCall();
+      cleanupCall(false, "media-access-failed");
+    } finally {
+      isMakingOfferRef.current = false;
     }
-  }, [createPeerConnection, sendSignal, toast, cleanupCall]);
+  }, [ensureLocalStream, createPeerConnection, sendCallSignal, scheduleIceRecovery, toast, cleanupCall]);
 
   const handleOffer = useCallback(async (sdp: RTCSessionDescriptionInit) => {
     try {
+      intentionalCallEndRef.current = false;
       const mode = currentCallType.current || 'voice';
-      const constraints = getMediaConstraints(mode);
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-
-      setLocalStream(stream);
-      localStreamRef.current = stream;
-
+      const stream = await ensureLocalStream(mode);
       const peer = createPeerConnection(stream);
-      peerRef.current = peer;
+      const incomingSdp = sdp.sdp || "";
+      if (incomingSdp && incomingSdp === lastRemoteOfferSdpRef.current && peer.signalingState === 'stable') {
+        console.log('[WEBRTC] Ignoring duplicate remote offer');
+        return;
+      }
+      lastRemoteOfferSdpRef.current = incomingSdp;
+
+      const offerCollision = isMakingOfferRef.current || peer.signalingState !== 'stable';
+      if (offerCollision && !isPolitePeerRef.current) {
+        console.log('[WEBRTC] Ignoring offer collision (impolite peer)');
+        return;
+      }
+
+      if (offerCollision) {
+        await peer.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit);
+      }
 
       await peer.setRemoteDescription(new RTCSessionDescription(sdp));
-
-      for (const candidate of pendingCandidates.current) {
-        try {
-          await peer.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (e) {
-          console.error('Error adding pending candidate:', e);
-        }
-      }
-      pendingCandidates.current = [];
+      await flushPendingCandidates(peer);
 
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
-      sendSignal({ type: 'answer', sdp: answer });
-      setCallStatus('connected');
+      sendCallSignal({ type: 'answer', sdp: answer }, true);
+
+      if (iceTimeoutRef.current) clearTimeout(iceTimeoutRef.current);
+      iceTimeoutRef.current = setTimeout(() => {
+        const activePeer = peerRef.current;
+        if (!activePeer) return;
+        const state = activePeer.iceConnectionState;
+        if (state !== 'connected' && state !== 'completed') {
+          scheduleIceRecovery('answer-timeout');
+        }
+      }, 10000);
     } catch (e) {
       console.error('Error handling offer:', e);
       toast({ variant: 'destructive', title: 'Failed to connect call' });
-      cleanupCall();
+      cleanupCall(false, "offer-handle-failed");
     }
-  }, [createPeerConnection, sendSignal, toast, cleanupCall]);
+  }, [ensureLocalStream, createPeerConnection, flushPendingCandidates, sendCallSignal, scheduleIceRecovery, toast, cleanupCall]);
 
   const handleAnswer = useCallback(async (sdp: RTCSessionDescriptionInit) => {
     if (!peerRef.current) return;
@@ -672,19 +1419,11 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       await peerRef.current.setRemoteDescription(
         new RTCSessionDescription(sdp)
       );
-
-      for (const candidate of pendingCandidates.current) {
-        try {
-          await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (e) {
-          console.error('Error adding pending candidate:', e);
-        }
-      }
-      pendingCandidates.current = [];
+      await flushPendingCandidates(peerRef.current);
     } catch (e) {
       console.error('Error handling answer:', e);
     }
-  }, []);
+  }, [flushPendingCandidates]);
 
   const handleIceCandidate = useCallback(async (candidate: RTCIceCandidateInit) => {
     if (!candidate) return;
@@ -763,7 +1502,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         if (userType === 'admin') {
           logConnectionEvent(leftPeerName, 'Went offline');
         }
-        cleanupCall();
+        cleanupCall(false, "peer-left");
         break;
       }
 
@@ -919,6 +1658,29 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       }
 
       case 'call-request': {
+        const incomingSessionId = data.callSessionId as string | undefined;
+        if (
+          incomingSessionId &&
+          callSessionIdRef.current &&
+          incomingSessionId !== callSessionIdRef.current
+        ) {
+          // Busy with another call session, reject stale/new competing request.
+          sendSignal({ type: 'call-rejected', callSessionId: incomingSessionId }, true);
+          break;
+        }
+
+        if (callStatus === 'connected' || callStatus === 'calling' || activeCall) {
+          sendSignal({ type: 'call-rejected', callSessionId: incomingSessionId }, true);
+          break;
+        }
+
+        if (incomingCallSessionIdRef.current && incomingSessionId && incomingCallSessionIdRef.current === incomingSessionId) {
+          break;
+        }
+
+        incomingCallSessionIdRef.current = incomingSessionId || createCallSessionId();
+        callSessionIdRef.current = incomingCallSessionIdRef.current;
+        intentionalCallEndRef.current = false;
         currentCallType.current = data.callType;
         setIncomingCall({ type: data.callType, from: data.from });
         setCallStatus('ringing');
@@ -926,44 +1688,70 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       }
 
       case 'call-accepted': {
+        if (!matchesActiveCallSession(data.callSessionId)) {
+          console.log('[WEBRTC] Ignoring stale call-accepted');
+          break;
+        }
+        if (!callSessionIdRef.current) {
+          callSessionIdRef.current = data.callSessionId || createCallSessionId();
+        }
         currentCallType.current = data.callType;
         await initiateWebRTC(data.callType);
         break;
       }
 
       case 'call-rejected': {
+        if (!matchesActiveCallSession(data.callSessionId)) break;
         toast({ title: 'Call declined' });
-        setCallStatus('idle');
-        setActiveCall(null);
-        currentCallType.current = null;
+        intentionalCallEndRef.current = true;
+        cleanupCall(false, "rejected-by-peer");
         break;
       }
 
       case 'offer': {
+        if (!matchesActiveCallSession(data.callSessionId)) {
+          console.log('[WEBRTC] Ignoring stale offer');
+          break;
+        }
+        if (!callSessionIdRef.current) {
+          callSessionIdRef.current = data.callSessionId || createCallSessionId();
+        }
         await handleOffer(data.sdp);
         break;
       }
 
       case 'answer': {
+        if (!matchesActiveCallSession(data.callSessionId)) {
+          console.log('[WEBRTC] Ignoring stale answer');
+          break;
+        }
         await handleAnswer(data.sdp);
         break;
       }
 
       case 'ice-candidate': {
+        if (!matchesActiveCallSession(data.callSessionId)) {
+          console.log('[WEBRTC] Ignoring stale ice-candidate');
+          break;
+        }
         await handleIceCandidate(data.candidate);
         break;
       }
 
       case 'call-end': {
+        if (!matchesActiveCallSession(data.callSessionId)) break;
         toast({ title: 'Call ended' });
-        cleanupCall();
+        intentionalCallEndRef.current = true;
+        cleanupCall(false, "ended-by-peer");
         break;
       }
 
       case 'message-queued': {
+        const queuedStatus: "sent" | "delivered" | "read" =
+          data.status === "delivered" || data.status === "read" ? data.status : "sent";
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === data.id ? { ...m, status: 'sent' as const } : m
+            m.id === data.id ? { ...m, status: queuedStatus } : m
           )
         );
         break;
@@ -1108,6 +1896,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   }, [
     defaultPeerName,
     userType,
+    activeCall,
+    callStatus,
+    createCallSessionId,
+    matchesActiveCallSession,
     sendSignal,
     toast,
     cleanupCall,
@@ -1117,78 +1909,148 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     handleIceCandidate
   ]);
 
+  useEffect(() => {
+    handleMessageRef.current = handleMessage;
+  }, [handleMessage]);
+
   const connect = useCallback(() => {
-    // Prevent duplicate connections
-    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
-      return;
+  if (Date.now() < reconnectBlockedUntilRef.current) {
+    return;
+  }
+  if (
+    wsRef.current?.readyState === WebSocket.OPEN ||
+    wsRef.current?.readyState === WebSocket.CONNECTING
+  ) {
+    return;
+  }
+
+  isIntentionalClose.current = false;
+
+  if (wsRef.current) {
+  try {
+    wsRef.current.close();
+  } catch {}
+}
+
+  const ws = new WebSocket(getWebSocketUrl());
+  wsRef.current = ws;
+
+  ws.onopen = () => {
+    reconnectAttempts.current = 0;
+    reconnectBlockedUntilRef.current = 0;
+
+    ws.send(
+      JSON.stringify({
+        type: "join",
+        roomId: FIXED_ROOM_ID,
+        profile: {
+          name: myProfileRef.current.name,
+          avatar: myProfileRef.current.avatar,
+        },
+        userType,
+        deviceId: deviceId.current,
+        sessionId: sessionId.current,
+        lastSyncTimestamp: lastSyncTimestamp.current,
+      })
+    );
+
+    setIsConnected(true);
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
     }
 
-    // Clean up any existing connection
-    if (wsRef.current) {
-      try {
-        wsRef.current.onopen = null;
-        wsRef.current.onmessage = null;
-        wsRef.current.onerror = null;
-        wsRef.current.onclose = null;
-        wsRef.current.close();
-      } catch (e) {
-        // Ignore cleanup errors
-      }
+    flushOfflineQueue();
+    emitAppEvent("network_change", { state: "ws-open" });
+  };
+
+  ws.onmessage = async (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      await handleMessageRef.current(data);
+    } catch (err) {
+      console.error("WebSocket parse error:", err);
     }
+  };
 
-    const ws = new WebSocket(getWebSocketUrl());
-    wsRef.current = ws;
+  ws.onerror = () => console.log("WS error");
 
-    ws.onopen = () => {
-      console.log("[CLIENT] socket connected as", userType, "deviceId=", deviceId.current);
-      ws.send(
-        JSON.stringify({
-          type: 'join',
-          roomId: FIXED_ROOM_ID,
-          profile: { name: myProfileRef.current.name, avatar: myProfileRef.current.avatar },
-          userType,
-          deviceId: deviceId.current,
-          sessionId: sessionId.current,
-          lastSyncTimestamp: lastSyncTimestamp.current
-        })
-      );
-      setIsConnected(true);
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
+ws.onclose = () => {
+  setIsConnected(false);
+
+  // stop reconnect if we closed intentionally
+  if (isIntentionalClose.current) return;
+
+  // stop reconnect if page hidden (prevents background loop)
+  if (document.hidden) return;
+
+  // limit attempts
+  if (reconnectAttempts.current >= maxReconnectAttempts.current) {
+    console.log("Max reconnect reached");
+    return;
+  }
+
+  reconnectAttempts.current += 1;
+
+  const delay = Math.min(1000 * 2 ** reconnectAttempts.current, 8000);
+  reconnectBlockedUntilRef.current = Date.now() + delay;
+  emitAppEvent("network_change", {
+    state: "ws-reconnect-wait",
+    attempt: reconnectAttempts.current,
+    delayMs: delay
+  });
+
+  reconnectTimeoutRef.current = setTimeout(() => {
+    if (!isIntentionalClose.current) {
+      connect();
+    }
+  }, delay);
+};
+}, [userType, flushOfflineQueue, emitAppEvent]);
+
+  useEffect(() => {
+    const tryResume = () => {
+      if (isIntentionalClose.current) return;
+      if (document.hidden) return;
+      if (navigator.onLine === false) return;
+      if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
+        return;
       }
-      flushOfflineQueue();
+      connect();
     };
 
-    ws.onmessage = async (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        await handleMessage(data);
-      } catch (err) {
-        console.error('WebSocket message parse error:', err);
+    const onVisibility = () => {
+      if (!document.hidden) {
+        emitAppEvent("background_resume", { source: "chat-connection" });
+        tryResume();
       }
     };
+    const onOnline = () => tryResume();
 
-    ws.onerror = () => console.error('WebSocket error');
-
-    ws.onclose = () => {
-      setIsConnected(false);
-
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      reconnectTimeoutRef.current = setTimeout(connect, 3000);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onOnline);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
     };
-  }, [userType, handleMessage, flushOfflineQueue]);
+  }, [connect, emitAppEvent]);
 
   const sendTyping = useCallback((isTyping: boolean) => {
     sendSignal({ type: 'typing', isTyping });
   }, [sendSignal]);
 
   const handleTyping = useCallback(() => {
-    sendTyping(true);
+    const now = Date.now();
+    if (now - lastTypingSentAtRef.current > 700) {
+      sendTyping(true);
+      lastTypingSentAtRef.current = now;
+    }
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    typingTimeoutRef.current = setTimeout(() => sendTyping(false), 2000);
+    typingTimeoutRef.current = setTimeout(() => {
+      sendTyping(false);
+      lastTypingSentAtRef.current = 0;
+    }, 2000);
   }, [sendTyping]);
 
   const sendMessage = useCallback((msg: Partial<Message>) => {
@@ -1262,38 +2124,129 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     [sendSignal]
   );
 
+  const mergeMessagesById = useCallback((prev: Message[], incoming: Message[]) => {
+    const statusPriority: Record<string, number> = {
+      sending: 0,
+      sent: 1,
+      delivered: 2,
+      read: 3,
+    };
+
+    const messageMap = new Map<string, Message>();
+    prev.forEach((m) => messageMap.set(m.id, m));
+
+    for (const nextMessage of incoming) {
+      const existing = messageMap.get(nextMessage.id);
+      if (!existing) {
+        messageMap.set(nextMessage.id, nextMessage);
+        continue;
+      }
+      const existingPriority = statusPriority[existing.status || "sending"] ?? 0;
+      const incomingPriority = statusPriority[nextMessage.status || "sent"] ?? 1;
+      messageMap.set(nextMessage.id, {
+        ...existing,
+        ...nextMessage,
+        status: incomingPriority >= existingPriority ? nextMessage.status : existing.status,
+      });
+    }
+
+    return Array.from(messageMap.values()).sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+  }, []);
+
+  const loadOlderMessages = useCallback(async () => {
+    if (isLoadingOlderHistory || !hasMoreHistory || !historyCursorRef.current) {
+      return;
+    }
+
+    setIsLoadingOlderHistory(true);
+    try {
+      const batch = await fetchChatHistory(
+        userType,
+        historyCursorRef.current,
+        OLDER_HISTORY_PAGE_SIZE
+      );
+      historyCursorRef.current = batch.nextCursor;
+      setHasMoreHistory(batch.hasMore);
+      if (batch.messages.length > 0) {
+        setMessages((prev) => mergeMessagesById(prev, batch.messages));
+      }
+    } catch (error) {
+      console.error("Failed to load older messages:", error);
+    } finally {
+      setIsLoadingOlderHistory(false);
+    }
+  }, [hasMoreHistory, isLoadingOlderHistory, mergeMessagesById, userType]);
+
   const startCall = useCallback(async (mode: 'voice' | 'video') => {
     if (!peerConnectedRef.current) {
       toast({ variant: 'destructive', title: 'Friend not online' });
       return;
     }
+    if (callStatus === 'calling' || callStatus === 'connected') {
+      return;
+    }
+    intentionalCallEndRef.current = false;
+    const newCallSessionId = createCallSessionId();
+    callSessionIdRef.current = newCallSessionId;
+    incomingCallSessionIdRef.current = null;
+    callEndLoggedRef.current = false;
+    callStartedAtRef.current = Date.now();
+    relayStartedAtRef.current = null;
+    relayUsageCountRef.current = 0;
+    relayTotalDurationMsRef.current = 0;
+    recoveryAttemptsRef.current = 0;
+    forceRelayRef.current = false;
+    currentVideoProfileRef.current = "hd";
     currentCallType.current = mode;
     setActiveCall(mode);
     setCallStatus('calling');
-    sendSignal({ type: 'call-request', callType: mode, from: myProfileRef.current.name });
-  }, [sendSignal, toast]);
+    emitCallTelemetry("call_start", { direction: "outgoing", mode });
+    sendSignal(
+      {
+        type: 'call-request',
+        callType: mode,
+        from: myProfileRef.current.name,
+        callSessionId: newCallSessionId
+      },
+      true
+    );
+  }, [callStatus, createCallSessionId, sendSignal, toast, emitCallTelemetry]);
 
   const acceptCall = useCallback(async () => {
     if (!incomingCall) return;
+    if (!incomingCallSessionIdRef.current) return;
+    if (callStatus === 'connected') return;
     const callType = incomingCall.type;
+    intentionalCallEndRef.current = false;
+    callSessionIdRef.current = incomingCallSessionIdRef.current;
+    callEndLoggedRef.current = false;
+    callStartedAtRef.current = Date.now();
+    relayStartedAtRef.current = null;
+    relayUsageCountRef.current = 0;
+    relayTotalDurationMsRef.current = 0;
+    currentVideoProfileRef.current = "hd";
     currentCallType.current = callType;
     setActiveCall(callType);
     setIncomingCall(null);
-    setCallStatus('connected');
-    sendSignal({ type: 'call-accepted', callType });
-  }, [incomingCall, sendSignal]);
+    setCallStatus('calling');
+    emitCallTelemetry("call_start", { direction: "incoming", mode: callType });
+    sendCallSignal({ type: 'call-accepted', callType }, true);
+  }, [callStatus, incomingCall, sendCallSignal, emitCallTelemetry]);
 
   const rejectCall = useCallback(() => {
-    sendSignal({ type: 'call-rejected' });
-    setIncomingCall(null);
-    setCallStatus('idle');
-    currentCallType.current = null;
-  }, [sendSignal]);
+    if (callStatus === 'idle' && !incomingCall) return;
+    intentionalCallEndRef.current = true;
+    sendCallSignal({ type: 'call-rejected' }, true);
+    cleanupCall(false, "rejected-local");
+  }, [callStatus, incomingCall, sendCallSignal, cleanupCall]);
 
   const endCall = useCallback(() => {
-    sendSignal({ type: 'call-end' });
-    cleanupCall();
-  }, [sendSignal, cleanupCall]);
+    intentionalCallEndRef.current = true;
+    sendCallSignal({ type: 'call-end' }, true);
+    cleanupCall(false, "ended-local");
+  }, [sendCallSignal, cleanupCall]);
 
   const toggleMute = useCallback(() => {
     if (localStreamRef.current) {
@@ -1324,6 +2277,80 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
   useEffect(() => {
     const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Background policy: keep audio alive, reduce video load, and stop video only if hidden for long.
+        if (currentCallType.current === 'video' && callStatus !== 'idle') {
+          void applyVideoProfile("sd", "background-hidden");
+          if (backgroundVideoSuspendTimeoutRef.current) {
+            clearTimeout(backgroundVideoSuspendTimeoutRef.current);
+          }
+          backgroundVideoSuspendTimeoutRef.current = setTimeout(() => {
+            if (!document.hidden || callStatus === 'idle') return;
+            const sender = videoSenderRef.current;
+            const liveTrack = localStreamRef.current?.getVideoTracks().find((t) => t.readyState === "live");
+            if (!sender || !liveTrack) return;
+            sender
+              .replaceTrack(null)
+              .then(() => {
+                liveTrack.stop();
+                localStreamRef.current?.removeTrack(liveTrack);
+                videoSenderDetachedRef.current = true;
+                setIsVideoOff(true);
+              })
+              .catch((err) => console.warn('[WEBRTC] failed to detach background video sender', err));
+          }, 30000);
+        }
+        return;
+      }
+
+      if (backgroundVideoSuspendTimeoutRef.current) {
+        clearTimeout(backgroundVideoSuspendTimeoutRef.current);
+        backgroundVideoSuspendTimeoutRef.current = null;
+      }
+
+      if (pendingRecoveryReasonRef.current && callStatus !== 'idle') {
+        const reason = pendingRecoveryReasonRef.current;
+        pendingRecoveryReasonRef.current = null;
+        scheduleIceRecovery(`resume-${reason}`);
+      }
+
+      // Resume camera without renegotiation when possible.
+      if (currentCallType.current === 'video' && callStatus !== 'idle') {
+        const hasLiveVideo = localStreamRef.current?.getVideoTracks().some((t) => t.readyState === 'live');
+        if (!hasLiveVideo || videoSenderDetachedRef.current) {
+          navigator.mediaDevices
+            .getUserMedia({ video: getMediaConstraints('video', currentVideoProfileRef.current).video as MediaTrackConstraints, audio: false })
+            .then((stream) => {
+              const track = stream.getVideoTracks()[0];
+              if (!track) return;
+              if (!localStreamRef.current) {
+                localStreamRef.current = new MediaStream();
+              }
+              localStreamRef.current?.addTrack(track);
+              const sender =
+                videoSenderRef.current ||
+                peerRef.current?.getSenders().find((s) => s.track?.kind === 'video') ||
+                null;
+              if (sender) {
+                videoSenderRef.current = sender;
+                sender.replaceTrack(track).catch(() => {});
+              } else if (peerRef.current && localStreamRef.current) {
+                videoSenderRef.current = peerRef.current.addTrack(track, localStreamRef.current);
+              }
+              videoSenderDetachedRef.current = false;
+              setIsVideoOff(false);
+              void applyVideoProfile(currentVideoProfileRef.current, "background-resume");
+            })
+            .catch((err) => console.warn('[WEBRTC] failed to resume camera', err));
+        } else {
+          const track = localStreamRef.current?.getVideoTracks()[0];
+          if (track) {
+            track.enabled = true;
+            setIsVideoOff(false);
+          }
+        }
+      }
+
       if (!document.hidden && messagesRef.current.length > 0) {
         const unreadMessageIds = messagesRef.current
           .filter(m => m.sender === 'them' && m.status !== 'read')
@@ -1338,48 +2365,84 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (backgroundVideoSuspendTimeoutRef.current) {
+        clearTimeout(backgroundVideoSuspendTimeoutRef.current);
+        backgroundVideoSuspendTimeoutRef.current = null;
+      }
     };
-  }, [sendSignal]);
+  }, [callStatus, getMediaConstraints, scheduleIceRecovery, sendSignal, applyVideoProfile]);
 
   useEffect(() => {
+    const handleOnline = () => {
+      emitAppEvent("network_change", { state: "online" });
+      if (callStatus !== 'idle' && !document.hidden) {
+        scheduleIceRecovery('network-online');
+      }
+    };
+
+    const connectionAny = (navigator as any).connection;
+    const handleConnectionChange = () => {
+      emitAppEvent("network_change", {
+        state: "connection-change",
+        effectiveType: connectionAny?.effectiveType || "unknown",
+        downlink: connectionAny?.downlink || null
+      });
+      if (callStatus !== 'idle' && !document.hidden) {
+        const now = Date.now();
+        if (now > handoffCooldownUntilRef.current) {
+          handoffCooldownUntilRef.current = now + 15000;
+          emitCallTelemetry("network_handoff", {
+            trigger: "connection-change",
+            effectiveType: connectionAny?.effectiveType || "unknown",
+            downlink: connectionAny?.downlink || null
+          });
+          scheduleIceRecovery('network-change');
+        }
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    connectionAny?.addEventListener?.('change', handleConnectionChange);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      connectionAny?.removeEventListener?.('change', handleConnectionChange);
+    };
+  }, [callStatus, scheduleIceRecovery, emitCallTelemetry, emitAppEvent]);
+
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      intentionalCallEndRef.current = true;
+      cleanupCall(false, "page-unload");
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [cleanupCall]);
+
+  useEffect(() => {
+    const onMemoryPressure = () => {
+      emitAppEvent("memory_pressure", { source: "browser-event" });
+    };
+    window.addEventListener("memorypressure", onMemoryPressure as EventListener);
+    return () => {
+      window.removeEventListener("memorypressure", onMemoryPressure as EventListener);
+    };
+  }, [emitAppEvent]);
+
+  useEffect(() => {
+    let cancelled = false;
     const loadHistory = async () => {
       console.log(`[HYDRATION] Loading messages from server for userType=${userType}`);
-      const serverMessages = await fetchChatHistory(userType);
-      console.log(`[HYDRATION] Loaded ${serverMessages.length} messages from server (source of truth)`);
-
-      const statusPriority: Record<string, number> = {
-        'sent': 1, 'delivered': 2, 'read': 3
-      };
+      const batch = await fetchChatHistory(userType, null, INITIAL_HISTORY_PAGE_SIZE);
+      const serverMessages = batch.messages;
+      historyCursorRef.current = batch.nextCursor;
+      setHasMoreHistory(batch.hasMore);
+      console.log(
+        `[HYDRATION] Loaded ${serverMessages.length} messages from server (source of truth), hasMore=${batch.hasMore}`
+      );
 
       setMessages((prev) => {
-        // Build a map of existing messages by ID
-        const messageMap = new Map<string, Message>();
-        prev.forEach(m => messageMap.set(m.id, m));
-
-        // Merge incoming messages
-        for (const incoming of serverMessages) {
-          const existing = messageMap.get(incoming.id);
-
-          if (existing) {
-            // Update existing: merge fields, preserve higher status
-            const existingPriority = statusPriority[existing.status || 'sent'] ?? 1;
-            const incomingPriority = statusPriority[incoming.status || 'sent'] ?? 1;
-
-            messageMap.set(incoming.id, {
-              ...existing,
-              ...incoming,
-              status: incomingPriority >= existingPriority ? incoming.status : existing.status
-            });
-          } else {
-            // Insert new message
-            messageMap.set(incoming.id, incoming);
-          }
-        }
-
-        // Convert back to array and sort by timestamp
-        const merged = Array.from(messageMap.values()).sort(
-          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        );
+        const merged = mergeMessagesById(prev, serverMessages);
 
         // Update localStorage cache with merged data
         localStorage.setItem(`chat_messages_${userType}`, JSON.stringify(merged));
@@ -1397,38 +2460,62 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         return merged;
       });
 
+      if (cancelled) return;
       setIsLoadingMessages(false);
     };
 
-    loadHistory();
-  }, [userType]);
-
-  useEffect(() => {
-    connect();
-    return () => {
-      cleanupCall();
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-        typingTimeoutRef.current = null;
-      }
-      if (wsRef.current) {
-        try {
-          wsRef.current.onopen = null;
-          wsRef.current.onmessage = null;
-          wsRef.current.onerror = null;
-          wsRef.current.onclose = null;
-          wsRef.current.close();
-        } catch (e) {
-          // Ignore cleanup errors
+    if (typeof (window as any).requestIdleCallback === "function") {
+      const idleId = (window as any).requestIdleCallback(() => {
+        void loadHistory();
+      }, { timeout: 1200 });
+      return () => {
+        cancelled = true;
+        if (typeof (window as any).cancelIdleCallback === "function") {
+          (window as any).cancelIdleCallback(idleId);
         }
-        wsRef.current = null;
-      }
+      };
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadHistory();
+    }, 60);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [connect, cleanupCall]);
+  }, [userType, mergeMessagesById]);
+
+useEffect(() => {
+  connect();
+
+  return () => {
+    cleanupCall(false, "hook-unmount");
+
+    isIntentionalClose.current = true;
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+
+    if (wsRef.current) {
+      try {
+        wsRef.current.onopen = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.onerror = null;
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+      } catch {}
+
+      wsRef.current = null;
+    }
+  };
+}, []); 
 
   useEffect(() => {
     const handler = () => {
@@ -1477,6 +2564,9 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     deviceId: deviceId.current,
     sessionId: sessionId.current,
     isLoadingMessages,
-    isLoadingProfiles
+    isLoadingProfiles,
+    hasMoreHistory,
+    isLoadingOlderHistory,
+    loadOlderMessages
   };
 }

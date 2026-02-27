@@ -48,7 +48,11 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
 
   useEffect(() => {
     if (isOpen) {
-      setMessages(JSON.parse(localStorage.getItem('chat_messages') || '[]'));
+      // Load chat messages from IndexedDB via async loader
+      (async () => {
+        const data = await (window as any).__loadChatMessagesFromIDB('chat_messages');
+        setMessages(JSON.parse(data || '[]'));
+      })();
       setConnectionLogs(JSON.parse(localStorage.getItem('connection_logs') || '[]'));
       
       fetch('/api/auth/passwords/metadata', { cache: 'no-store' })
@@ -198,12 +202,10 @@ export function AdminPanel({ isOpen, onClose, onNuke }: AdminPanelProps) {
           </div>
         </DialogHeader>
 
-        {/* Tabs */}
+        {/* Tabs - Security only (removed Data and Logs for lighter admin panel) */}
         <div className="flex gap-1 sm:gap-2 border-b border-zinc-800 pb-2 overflow-x-auto flex-shrink-0">
           {[
-            { id: 'security', label: 'Security', icon: Key },
-            { id: 'data', label: 'Data', icon: MessageSquare },
-            { id: 'logs', label: 'Logs', icon: Activity }
+            { id: 'security', label: 'Security', icon: Key }
           ].map(tab => (
             <button
               key={tab.id}

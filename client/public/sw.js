@@ -1,11 +1,89 @@
-// Service Worker for Push Notifications
+// Service Worker for Push Notifications + deploy-safe asset caching
+const SW_VERSION = new URL(self.location.href).searchParams.get("v") || "dev";
+const STATIC_CACHE = `pyqmaster-static-${SW_VERSION}`;
+const RUNTIME_CACHE = `pyqmaster-runtime-${SW_VERSION}`;
+const CACHE_PREFIX = "pyqmaster-";
+const PRECACHE_URLS = ["/", "/index.html", "/manifest.json", "/favicon.png"];
 
 self.addEventListener("install", (event) => {
-  self.skipWaiting();
+  event.waitUntil(
+    (async () => {
+      self.skipWaiting();
+      const cache = await caches.open(STATIC_CACHE);
+      await cache.addAll(PRECACHE_URLS);
+    })()
+  );
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter((key) => key.startsWith(CACHE_PREFIX) && key !== STATIC_CACHE && key !== RUNTIME_CACHE)
+          .map((key) => caches.delete(key))
+      );
+      await self.clients.claim();
+    })()
+  );
+});
+
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  if (req.method !== "GET") return;
+  if (req.headers.has("range") || req.cache === "no-store") {
+    event.respondWith(fetch(req));
+    return;
+  }
+
+  const url = new URL(req.url);
+
+  // Never cache Cloudinary upload responses or API traffic.
+  if (
+    url.hostname === "api.cloudinary.com" ||
+    url.pathname.startsWith("/api/")
+  ) {
+    event.respondWith(fetch(req));
+    return;
+  }
+
+  const isNavigation = req.mode === "navigate" || url.pathname === "/" || url.pathname.endsWith("/index.html");
+  if (isNavigation) {
+    // index.html should always be network-first to avoid stale bundles.
+    event.respondWith(
+      (async () => {
+        try {
+          const networkRes = await fetch(req);
+          if (networkRes.ok) {
+            const cache = await caches.open(STATIC_CACHE);
+            cache.put("/index.html", networkRes.clone());
+          }
+          return networkRes;
+        } catch (_err) {
+          const cached = await caches.match("/index.html");
+          return cached || new Response("Offline", { status: 503 });
+        }
+      })()
+    );
+    return;
+  }
+
+  const isStaticAsset = /\.(js|css|png|jpg|jpeg|gif|svg|webp|ico|woff2?)$/i.test(url.pathname);
+  if (isStaticAsset && url.origin === self.location.origin) {
+    event.respondWith(
+      (async () => {
+        const cached = await caches.match(req);
+        if (cached) return cached;
+        const networkRes = await fetch(req);
+        if (networkRes.ok) {
+          const cache = await caches.open(RUNTIME_CACHE);
+          cache.put(req, networkRes.clone());
+        }
+        return networkRes;
+      })()
+    );
+  }
 });
 
 // Handle incoming push

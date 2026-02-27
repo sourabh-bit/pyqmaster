@@ -1,4 +1,6 @@
 import React, {
+  Suspense,
+  lazy,
   useState,
   useEffect,
   useRef,
@@ -9,7 +11,6 @@ import React, {
 import {
   Send,
   Paperclip,
-  Mic,
   Video,
   Phone,
   Lock,
@@ -18,15 +19,15 @@ import {
   Menu,
   X,
   Trash2,
-  Square,
   Settings,
   Reply,
   Shield,
   MoreVertical,
   Camera,
-  Image,
+  Image as ImageIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { uploadFormDataWithProgress } from "@/lib/upload-xhr";
 import { formatDistanceToNow } from "date-fns";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -42,16 +43,25 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { useChatConnection } from "@/hooks/use-chat-connection";
-import { useAudioRecorder } from "@/hooks/use-audio-recorder";
+
 import { useToast } from "@/hooks/use-toast";
-import { ActiveCallOverlay } from "./ActiveCallOverlay";
-import { EmojiPicker } from "./EmojiPicker";
-import { ProfileEditor } from "./ProfileEditor";
-import { MediaViewer } from "./MediaViewer";
-
-
-import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import ChatMessage from "./ChatMessage";
+
+const ActiveCallOverlay = lazy(() =>
+  import("./ActiveCallOverlay").then((module) => ({ default: module.ActiveCallOverlay }))
+);
+const EmojiPicker = lazy(() =>
+  import("./EmojiPicker").then((module) => ({ default: module.EmojiPicker }))
+);
+const ProfileEditor = lazy(() =>
+  import("./ProfileEditor").then((module) => ({ default: module.ProfileEditor }))
+);
+const MediaViewer = lazy(() =>
+  import("./MediaViewer").then((module) => ({ default: module.MediaViewer }))
+);
+const LazySettingsPanel = lazy(() =>
+  import("@/components/settings/SettingsPanel").then((module) => ({ default: module.SettingsPanel }))
+);
 
 const FIXED_ROOM_ID = "secure-room-001";
 
@@ -77,6 +87,25 @@ interface Message {
   };
 }
 
+type UploadQuality = "standard" | "hd";
+type UploadStage =
+  | "queued"
+  | "waiting_online"
+  | "compressing"
+  | "uploading"
+  | "retry_wait"
+  | "success"
+  | "failed";
+
+interface UploadProgressPayload {
+  fileName: string;
+  stage: UploadStage;
+  progress: number;
+  attempt?: number;
+  queueSize?: number;
+  message?: string;
+}
+
 export function ChatLayout({
   onLock,
   currentUser,
@@ -99,6 +128,12 @@ export function ChatLayout({
     type: "image" | "video";
   } | null>(null);
   const [showMediaOptions, setShowMediaOptions] = useState(false);
+  const [uploadQuality, setUploadQuality] = useState<UploadQuality>("standard");
+  const [participantImageLoading, setParticipantImageLoading] = useState(true);
+  const [isAppVisible, setIsAppVisible] = useState(!document.hidden);
+  const [visibleMessageCount, setVisibleMessageCount] = useState(80);
+  const [isLowMemoryMode, setIsLowMemoryMode] = useState(false);
+  const imgRef = useRef<HTMLImageElement>(null);
 
   // selection / reply
   const [isSelectMode, setIsSelectMode] = useState(false);
@@ -112,15 +147,12 @@ export function ChatLayout({
   const scrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasScrolledToBottomOnLoad = useRef(false);
+  const uploadQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const queuedUploadCountRef = useRef(0);
+  const compressionQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const scrollTopLoadThrottleRef = useRef(0);
 
-  // recorder
-  const {
-    isRecording,
-    recordingTime,
-    startRecording,
-    stopRecording,
-    cancelRecording,
-  } = useAudioRecorder();
+
 
   // chat connection
   const {
@@ -149,6 +181,9 @@ export function ChatLayout({
     isMuted,
     isVideoOff,
     isLoadingMessages,
+    hasMoreHistory,
+    isLoadingOlderHistory,
+    loadOlderMessages,
   } = useChatConnection(currentUser);
 
   // safe wrapper so TS is happy even if hook returns undefined for deleteMessages
@@ -176,6 +211,23 @@ export function ChatLayout({
     return () => channel.close();
   }, [emergencyWipe]);
 
+  // Handle participant image loading state
+  useEffect(() => {
+    if (!peerProfile.avatar) {
+      setParticipantImageLoading(false);
+      return;
+    }
+
+    setParticipantImageLoading(true);
+
+    // Fallback timeout in case image never loads
+    const timeout = setTimeout(() => {
+      setParticipantImageLoading(false);
+    }, 2000);
+
+    return () => clearTimeout(timeout);
+  }, [peerProfile.avatar]);
+
   // retention
   useEffect(() => {
     const loadRetentionSettings = async () => {
@@ -197,6 +249,16 @@ export function ChatLayout({
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
+  }, []);
+
+  const emitMobileEvent = useCallback((event: string, detail: Record<string, unknown> = {}) => {
+    const payload = {
+      event,
+      at: new Date().toISOString(),
+      ...detail,
+    };
+    console.log("[APP_EVT]", JSON.stringify(payload));
+    window.dispatchEvent(new CustomEvent("chat:mobile-event", { detail: payload }));
   }, []);
 
   // Optimize scroll to bottom - only scroll if user is near bottom
@@ -256,6 +318,51 @@ export function ChatLayout({
       return () => window.visualViewport?.removeEventListener("resize", handleResize);
     }
   }, [scrollToBottom]);
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      const visible = !document.hidden;
+      setIsAppVisible(visible);
+      if (visible) {
+        emitMobileEvent("background_resume", { source: "chat-layout" });
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [emitMobileEvent]);
+
+  useEffect(() => {
+    const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 0;
+    if (deviceMemory > 0 && deviceMemory <= 4) {
+      setIsLowMemoryMode(true);
+    }
+
+    let timer: number | null = null;
+    const sampleMemory = () => {
+      const memory = (performance as Performance & {
+        memory?: { jsHeapSizeLimit: number; usedJSHeapSize: number };
+      }).memory;
+      if (!memory || !memory.jsHeapSizeLimit) return;
+      const usageRatio = memory.usedJSHeapSize / memory.jsHeapSizeLimit;
+      if (usageRatio > 0.82) {
+        setIsLowMemoryMode(true);
+        emitMobileEvent("memory_pressure", {
+          usedMb: Number((memory.usedJSHeapSize / (1024 * 1024)).toFixed(1)),
+          limitMb: Number((memory.jsHeapSizeLimit / (1024 * 1024)).toFixed(1)),
+          ratio: Number(usageRatio.toFixed(2)),
+        });
+      }
+    };
+
+    timer = window.setInterval(() => {
+      if (!document.hidden) sampleMemory();
+    }, 45000);
+    sampleMemory();
+
+    return () => {
+      if (timer != null) window.clearInterval(timer);
+    };
+  }, [emitMobileEvent]);
 
   // input change with WhatsApp-style growth (max 6 lines)
   const handleInputChange = useCallback(
@@ -323,119 +430,331 @@ export function ChatLayout({
     textareaRef.current?.focus();
   }, []);
 
-  // media send handler for MediaPreviewSender
-  const handleMediaSend = useCallback(
-    (data: { type: "image" | "video"; mediaUrl: string; text: string }) => {
-      sendMessage(data);
-      // Scroll to bottom after sending media
-      requestAnimationFrame(() => {
-        scrollToBottom();
-      });
-    },
-    [sendMessage, scrollToBottom]
+
+  const wait = useCallback(
+    (ms: number) =>
+      new Promise<void>((resolve) => {
+        window.setTimeout(resolve, ms);
+      }),
+    []
   );
 
-  const compressImage = useCallback(async (file: File, maxWidth = 1600, quality = 0.85): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      const objectUrl = URL.createObjectURL(file);
-      
-      img.onload = () => {
-        try {
-          URL.revokeObjectURL(objectUrl);
-          const canvas = document.createElement('canvas');
-          let { width, height } = img;
-          
-          if (width > maxWidth) {
-            height = (height * maxWidth) / width;
-            width = maxWidth;
-          }
-          
-          canvas.width = width;
-          canvas.height = height;
-          
-          const ctx = canvas.getContext('2d');
-          if (!ctx) {
-            reject(new Error('Could not get canvas context'));
-            return;
-          }
-          ctx.drawImage(img, 0, 0, width, height);
-          
-          const result = canvas.toDataURL('image/jpeg', quality);
-          resolve(result);
-        } catch (e) {
-          reject(e);
+  const waitForVisible = useCallback(async () => {
+    if (!document.hidden) return;
+    await new Promise<void>((resolve) => {
+      const onVisible = () => {
+        if (!document.hidden) {
+          document.removeEventListener("visibilitychange", onVisible);
+          emitMobileEvent("background_resume", { source: "upload-flow" });
+          resolve();
         }
       };
-      
-      img.onerror = () => {
-        URL.revokeObjectURL(objectUrl);
-        reject(new Error('Failed to load image'));
-      };
-      
-      img.src = objectUrl;
+      document.addEventListener("visibilitychange", onVisible);
     });
+  }, [emitMobileEvent]);
+
+  const toMb = useCallback((bytes: number) => (bytes / (1024 * 1024)).toFixed(2), []);
+
+  const emitUploadProgress = useCallback((payload: UploadProgressPayload) => {
+    window.dispatchEvent(new CustomEvent("chat-upload-progress", { detail: payload }));
   }, []);
 
-  const uploadToCloudinary = useCallback(async (file: File): Promise<string | null> => {
-    try {
-      const mediaType = file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'image';
-      
-      let fileToUpload: File | Blob = file;
-      
-      // Compress large images
-      if (mediaType === 'image' && file.size > 500 * 1024) {
-        try {
-          const compressedBase64 = await compressImage(file);
-          const response = await fetch(compressedBase64);
-          fileToUpload = await response.blob();
-          console.log(`[UPLOAD] Compressed from ${Math.round(file.size/1024)}KB to ${Math.round(fileToUpload.size/1024)}KB`);
-        } catch (compressError) {
-          console.warn('[UPLOAD] Compression failed, using original:', compressError);
-        }
-      }
-      
-      // Get upload config from server
-      const configResponse = await fetch('/api/upload/config');
-      if (!configResponse.ok) {
-        throw new Error('Could not get upload config');
-      }
-      const config = await configResponse.json();
-      
-      if (!config.cloudName) {
-        throw new Error('Upload not configured');
-      }
-      
-      // Direct upload to Cloudinary
-      const formData = new FormData();
-      formData.append('file', fileToUpload);
-      formData.append('api_key', config.apiKey);
-      formData.append('timestamp', config.timestamp);
-      formData.append('signature', config.signature);
-      formData.append('folder', 'pyqmaster');
-      
-      const resourceType = mediaType === 'video' || mediaType === 'audio' ? 'video' : 'image';
-      const uploadUrl = `https://api.cloudinary.com/v1_1/${config.cloudName}/${resourceType}/upload`;
-      
-      const uploadResponse = await fetch(uploadUrl, {
-        method: 'POST',
-        body: formData,
+  const waitForOnline = useCallback(
+    async (fileName: string) => {
+      if (navigator.onLine) return;
+      emitUploadProgress({
+        fileName,
+        stage: "waiting_online",
+        progress: 5,
+        message: "Waiting for internet connection",
+      });
+      await new Promise<void>((resolve) => {
+        const onOnline = () => {
+          window.removeEventListener("online", onOnline);
+          resolve();
+        };
+        window.addEventListener("online", onOnline, { once: true });
+      });
+    },
+    [emitUploadProgress]
+  );
+
+  const runCompressionExclusive = useCallback(
+    async <T,>(task: () => Promise<T>): Promise<T> => {
+      let result!: T;
+      const run = compressionQueueRef.current.then(async () => {
+        result = await task();
+      });
+      compressionQueueRef.current = run.then(
+        () => undefined,
+        () => undefined
+      );
+      await run;
+      return result;
+    },
+    []
+  );
+
+  const queueUpload = useCallback(
+    async (fileName: string, task: () => Promise<string | null>) => {
+      queuedUploadCountRef.current += 1;
+      console.log(`[UPLOAD] queued; pending=${queuedUploadCountRef.current}`);
+      emitUploadProgress({
+        fileName,
+        stage: "queued",
+        progress: 0,
+        queueSize: queuedUploadCountRef.current,
       });
 
-      if (!uploadResponse.ok) {
-        const errorText = await uploadResponse.text();
-        console.error('Cloudinary error:', errorText);
-        throw new Error('Upload failed');
-      }
+      const queuedTask = uploadQueueRef.current.then(async () => {
+        try {
+          return await task();
+        } finally {
+          queuedUploadCountRef.current = Math.max(0, queuedUploadCountRef.current - 1);
+          console.log(`[UPLOAD] finished; pending=${queuedUploadCountRef.current}`);
+        }
+      });
 
-      const result = await uploadResponse.json();
-      return result.secure_url;
-    } catch (error) {
-      console.error('Upload error:', error);
-      toast({ variant: 'destructive', title: 'Failed to upload media' });
-      return null;
-    }
-  }, [toast, compressImage]);
+      uploadQueueRef.current = queuedTask.then(
+        () => undefined,
+        () => undefined
+      );
+
+      return queuedTask;
+    },
+    [emitUploadProgress]
+  );
+
+  const compressImage = useCallback(
+    async (file: File, qualityMode: UploadQuality): Promise<Blob> =>
+      runCompressionExclusive(async () => {
+        const targetBytes = qualityMode === "hd" ? 4.5 * 1024 * 1024 : 2.4 * 1024 * 1024;
+        const maxDimension = qualityMode === "hd" ? 2400 : 1680;
+        const minLongSide = qualityMode === "hd" ? 900 : 720;
+        const minQuality = qualityMode === "hd" ? 0.68 : 0.56;
+        let jpegQuality = qualityMode === "hd" ? 0.9 : 0.82;
+
+        const source = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const element = new window.Image();
+          const objectUrl = URL.createObjectURL(file);
+          element.onload = () => {
+            URL.revokeObjectURL(objectUrl);
+            resolve(element);
+          };
+          element.onerror = (err) => {
+            URL.revokeObjectURL(objectUrl);
+            reject(err);
+          };
+          element.src = objectUrl;
+        });
+
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d", { alpha: false });
+        if (!ctx) throw new Error("Canvas context unavailable");
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+
+        try {
+          let width = source.naturalWidth || source.width;
+          let height = source.naturalHeight || source.height;
+          const longSide = Math.max(width, height);
+          if (longSide > maxDimension) {
+            const ratio = maxDimension / longSide;
+            width = Math.max(1, Math.round(width * ratio));
+            height = Math.max(1, Math.round(height * ratio));
+          }
+
+          let bestBlob: Blob | null = null;
+          let pass = 0;
+
+          while (pass < 8) {
+            pass += 1;
+            canvas.width = width;
+            canvas.height = height;
+            ctx.clearRect(0, 0, width, height);
+            ctx.drawImage(source, 0, 0, width, height);
+
+            const blob = await new Promise<Blob>((resolve, reject) => {
+              canvas.toBlob(
+                (result) =>
+                  result ? resolve(result) : reject(new Error("Compression failed")),
+                "image/jpeg",
+                jpegQuality
+              );
+            });
+
+            bestBlob = blob;
+            console.log(
+              `[UPLOAD] compress pass=${pass} quality=${jpegQuality.toFixed(2)} size=${toMb(blob.size)}MB (${width}x${height})`
+            );
+
+            if (blob.size <= targetBytes) break;
+
+            if (jpegQuality > minQuality + 0.01) {
+              jpegQuality = Math.max(minQuality, jpegQuality - 0.08);
+            } else {
+              const currentLongSide = Math.max(width, height);
+              if (currentLongSide <= minLongSide) break;
+              width = Math.max(1, Math.round(width * 0.86));
+              height = Math.max(1, Math.round(height * 0.86));
+            }
+
+            await wait(0);
+          }
+
+          return bestBlob ?? file;
+        } finally {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          canvas.width = 0;
+          canvas.height = 0;
+          source.src = "";
+        }
+      }),
+    [runCompressionExclusive, toMb, wait]
+  );
+
+  const uploadToCloudinary = useCallback(
+    async (file: File): Promise<string | null> =>
+      queueUpload(file.name, async () => {
+        try {
+          const presetName = "chat_upload";
+          const retryBackoffMs = [500, 1500, 3000];
+          const maxAttempts = retryBackoffMs.length + 1;
+
+          console.log(
+            `[UPLOAD] start name=${file.name} type=${file.type} original=${toMb(file.size)}MB quality=${uploadQuality}`
+          );
+          emitUploadProgress({
+            fileName: file.name,
+            stage: "uploading",
+            progress: 8,
+            queueSize: queuedUploadCountRef.current,
+          });
+
+          await waitForOnline(file.name);
+          await waitForVisible();
+
+          let fileToUpload: File | Blob = file;
+          if (file.type.startsWith("image/") && file.size > 1024 * 1024) {
+            emitUploadProgress({
+              fileName: file.name,
+              stage: "compressing",
+              progress: 18,
+            });
+            fileToUpload = await compressImage(file, uploadQuality);
+            console.log(`[UPLOAD] after-compression size=${toMb(fileToUpload.size)}MB`);
+            emitUploadProgress({
+              fileName: file.name,
+              stage: "compressing",
+              progress: 42,
+            });
+          } else if (file.type.startsWith("video/")) {
+            const maxVideoBytes = uploadQuality === "hd" ? 80 * 1024 * 1024 : 60 * 1024 * 1024;
+            if (file.size > maxVideoBytes) {
+              throw new Error(`Video exceeds ${Math.round(maxVideoBytes / (1024 * 1024))}MB upload limit`);
+            }
+            await wait(0);
+          }
+
+          const uploadUrl = "https://api.cloudinary.com/v1_1/dqdx30pbj/auto/upload";
+          let lastError: unknown = null;
+
+          for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            await waitForOnline(file.name);
+            await waitForVisible();
+            const formData = new FormData();
+            formData.append("file", fileToUpload, file.name);
+            formData.append("upload_preset", presetName);
+
+            try {
+              emitUploadProgress({
+                fileName: file.name,
+                stage: "uploading",
+                progress: 45 + Math.min(45, attempt * 10),
+                attempt,
+              });
+              console.log(`[UPLOAD] attempt ${attempt}/${maxAttempts}`);
+              const result = await uploadFormDataWithProgress(
+                uploadUrl,
+                formData,
+                {
+                  timeoutMs: 60_000,
+                  onProgress: ({ loaded, total }) => {
+                    if (total <= 0) return;
+                    const ratio = Math.min(1, Math.max(0, loaded / total));
+                    const progress = Math.round(45 + ratio * 45);
+                    emitUploadProgress({
+                      fileName: file.name,
+                      stage: "uploading",
+                      progress,
+                      attempt,
+                    });
+                  },
+                }
+              );
+
+              const text = result.responseText;
+              console.log(
+                `[UPLOAD] response attempt ${attempt}: status=${result.status} body=${text.slice(0, 280)}`
+              );
+
+              if (result.status < 200 || result.status >= 300) {
+                if (result.status === 400 || result.status === 401) {
+                  console.error(
+                    `[UPLOAD] Cloudinary auth/preset error preset=${presetName} status=${result.status} response=${text}`
+                  );
+                }
+                throw new Error(`Cloudinary upload failed (${result.status})`);
+              }
+
+              const data = JSON.parse(text);
+              if (!data?.secure_url) {
+                throw new Error("Cloudinary response missing secure_url");
+              }
+              emitUploadProgress({
+                fileName: file.name,
+                stage: "success",
+                progress: 100,
+                attempt,
+              });
+              return data.secure_url as string;
+            } catch (err) {
+              lastError = err;
+              console.error(`[UPLOAD] attempt ${attempt} failed`, err);
+              if (attempt < maxAttempts) {
+                const backoffMs = retryBackoffMs[attempt - 1] ?? 3000;
+                emitMobileEvent("upload_retry", {
+                  fileName: file.name,
+                  attempt,
+                  backoffMs,
+                });
+                emitUploadProgress({
+                  fileName: file.name,
+                  stage: "retry_wait",
+                  progress: 25,
+                  attempt,
+                  message: `Retrying in ${backoffMs}ms`,
+                });
+                await wait(backoffMs);
+              }
+            }
+          }
+
+          throw lastError ?? new Error("Upload failed after retries");
+        } catch (e) {
+          console.error(e);
+          emitUploadProgress({
+            fileName: file.name,
+            stage: "failed",
+            progress: 100,
+            message: e instanceof Error ? e.message : "Upload failed",
+          });
+          toast({ variant: "destructive", title: "Failed to upload media" });
+          return null;
+        }
+      }),
+    [queueUpload, toMb, uploadQuality, emitUploadProgress, waitForOnline, waitForVisible, compressImage, wait, toast, emitMobileEvent]
+  );
 
   const handleCamera = useCallback(() => {
     const input = document.createElement('input');
@@ -469,13 +788,12 @@ export function ChatLayout({
       const files = (e.target as HTMLInputElement).files;
       if (files && files.length > 0) {
         toast({ title: `Uploading ${files.length} file(s)...` });
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i];
+        for (const file of Array.from(files)) {
           const url = await uploadToCloudinary(file);
-          if (url) {
-            const type = file.type.startsWith('image/') ? 'image' : 'video';
-            sendMessage({ type, mediaUrl: url, text: '' });
-          }
+          if (!url) continue;
+          const type = file.type.startsWith('image/') ? 'image' : 'video';
+          sendMessage({ type, mediaUrl: url, text: '' });
+          await wait(0);
         }
         // Scroll to bottom after sending gallery media
         requestAnimationFrame(() => {
@@ -485,38 +803,8 @@ export function ChatLayout({
     };
     input.click();
     setShowMediaOptions(false);
-  }, [sendMessage, uploadToCloudinary, toast, scrollToBottom]);
+  }, [sendMessage, uploadToCloudinary, toast, scrollToBottom, wait]);
 
-
-
-  // recorder
-  const handleStartRecording = useCallback(async () => {
-    try {
-      await startRecording();
-    } catch {
-      toast({ variant: "destructive", title: "Microphone access denied" });
-    }
-  }, [startRecording, toast]);
-
-  const handleStopRecording = useCallback(async () => {
-    const audioBlob = await stopRecording();
-    if (audioBlob) {
-      toast({ title: 'Uploading voice message...' });
-      const audioFile = new File([audioBlob], 'voice.webm', { type: 'audio/webm' });
-      const url = await uploadToCloudinary(audioFile);
-      if (url) {
-        sendMessage({
-          type: "audio",
-          mediaUrl: url,
-          text: `🎤 Voice (0:${recordingTime.toString().padStart(2, "0")})`,
-        });
-        // Scroll to bottom after sending voice message
-        requestAnimationFrame(() => {
-          scrollToBottom();
-        });
-      }
-    }
-  }, [stopRecording, sendMessage, recordingTime, uploadToCloudinary, toast, scrollToBottom]);
 
   // long press -> select mode (with haptic feedback on supported devices)
   const handleMessageLongPress = useCallback((msgId: string) => {
@@ -583,31 +871,49 @@ export function ChatLayout({
     }
   }, [tapCount, onLock]);
 
-  // render messages - memoized to prevent re-renders
-  const messagesList = useMemo(
-    () =>
-      messages.map((msg) => (
-        <ChatMessage
-          key={msg.id}
-          message={msg as Message}
-          isSelected={selectedMessages.has(msg.id)}
-          isSelectMode={isSelectMode}
-          onSelect={handleSelectMessage}
-          onLongPress={handleMessageLongPress}
-          onReply={handleReplyAction}
-          onSwipeReply={handleReply}
-        />
-      )),
-    [
-      messages.length, // Only depend on length to reduce re-renders
-      selectedMessages.size,
-      isSelectMode,
-      handleSelectMessage,
-      handleMessageLongPress,
-      handleReplyAction,
-      handleReply,
-    ]
+  const messageBatchSize = isLowMemoryMode ? 40 : 80;
+  const hiddenMessagesCount = Math.max(0, messages.length - visibleMessageCount);
+  const visibleMessages = useMemo(
+    () => messages.slice(Math.max(0, messages.length - visibleMessageCount)),
+    [messages, visibleMessageCount]
   );
+
+  useEffect(() => {
+    if (messages.length === 0) {
+      setVisibleMessageCount(messageBatchSize);
+      return;
+    }
+    setVisibleMessageCount((prev) => {
+      const minimum = Math.min(messages.length, Math.max(messageBatchSize, prev));
+      return minimum;
+    });
+  }, [messageBatchSize, messages.length]);
+
+  // render messages - memoized to prevent re-renders
+const messagesList = useMemo(
+  () =>
+    visibleMessages.map((msg) => (
+      <ChatMessage
+        key={msg.id}
+        message={msg as Message}
+        isSelected={selectedMessages.has(msg.id)}
+        isSelectMode={isSelectMode}
+        onSelect={handleSelectMessage}
+        onLongPress={handleMessageLongPress}
+        onReply={handleReplyAction}
+        onSwipeReply={handleReply}
+      />
+    )),
+  [
+    visibleMessages,
+    selectedMessages.size,
+    isSelectMode,
+    handleSelectMessage,
+    handleMessageLongPress,
+    handleReplyAction,
+    handleReply,
+  ]
+);
 
   // Handle click outside messages to deselect
   const handleContainerClick = useCallback(
@@ -619,6 +925,28 @@ export function ChatLayout({
     },
     [isSelectMode]
   );
+
+  const handleMessagesScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    if (target.scrollTop > 80) return;
+    const now = Date.now();
+    if (now - scrollTopLoadThrottleRef.current < 300) return;
+    scrollTopLoadThrottleRef.current = now;
+    if (hiddenMessagesCount > 0) {
+      setVisibleMessageCount((prev) => Math.min(messages.length, prev + messageBatchSize));
+      return;
+    }
+    if (hasMoreHistory && !isLoadingOlderHistory) {
+      void loadOlderMessages();
+    }
+  }, [hiddenMessagesCount, hasMoreHistory, isLoadingOlderHistory, loadOlderMessages, messageBatchSize, messages.length]);
+
+  const handleLoadOlder = useCallback(async () => {
+    if (hasMoreHistory && !isLoadingOlderHistory) {
+      await loadOlderMessages();
+    }
+    setVisibleMessageCount((prev) => prev + messageBatchSize * 2);
+  }, [hasMoreHistory, isLoadingOlderHistory, loadOlderMessages, messageBatchSize]);
 
   return (
     <div className="w-full h-full flex items-center justify-center bg-[#0a1014]">
@@ -876,43 +1204,57 @@ export function ChatLayout({
 
           {/* Active Call Overlay */}
           {activeCall && (
-            <ActiveCallOverlay
-              peerName={peerProfile.name}
-              peerAvatar={peerProfile.avatar}
-              callStatus={callStatus}
-              localStream={localStream}
-              remoteStream={remoteStream}
-              isMuted={isMuted}
-              isVideoOff={isVideoOff}
-              onToggleMute={toggleMute}
-              onToggleVideo={toggleVideo}
-              onEndCall={endCall}
-            />
+            <Suspense fallback={null}>
+              <ActiveCallOverlay
+                peerName={peerProfile.name}
+                peerAvatar={peerProfile.avatar}
+                callStatus={callStatus}
+                localStream={localStream}
+                remoteStream={remoteStream}
+                isMuted={isMuted}
+                isVideoOff={isVideoOff}
+                onToggleMute={toggleMute}
+                onToggleVideo={toggleVideo}
+                onEndCall={endCall}
+              />
+            </Suspense>
           )}
 
           {/* Profile Editor */}
-          <ProfileEditor
-            isOpen={showProfileEditor}
-            onClose={() => setShowProfileEditor(false)}
-            currentName={myProfile.name}
-            currentAvatar={myProfile.avatar}
-            onSave={(name, avatar) => updateMyProfile({ name, avatar })}
-          />
+          {showProfileEditor && (
+            <Suspense fallback={null}>
+              <ProfileEditor
+                isOpen={showProfileEditor}
+                onClose={() => setShowProfileEditor(false)}
+                currentName={myProfile.name}
+                currentAvatar={myProfile.avatar}
+                onSave={(name, avatar) => updateMyProfile({ name, avatar })}
+              />
+            </Suspense>
+          )}
 
           {/* Settings Panel */}
-          <SettingsPanel
-            isOpen={showSettings}
-            onClose={() => setShowSettings(false)}
-            userType={currentUser}
-          />
+          {showSettings && (
+            <Suspense fallback={null}>
+              <LazySettingsPanel
+                isOpen={showSettings}
+                onClose={() => setShowSettings(false)}
+                userType={currentUser}
+              />
+            </Suspense>
+          )}
 
           {/* Media Viewer */}
-          <MediaViewer
-            isOpen={!!selectedMedia}
-            mediaUrl={selectedMedia?.url || ""}
-            mediaType={selectedMedia?.type || "image"}
-            onClose={() => setSelectedMedia(null)}
-          />
+          {selectedMedia && (
+            <Suspense fallback={null}>
+              <MediaViewer
+                isOpen={!!selectedMedia}
+                mediaUrl={selectedMedia.url}
+                mediaType={selectedMedia.type}
+                onClose={() => setSelectedMedia(null)}
+              />
+            </Suspense>
+          )}
 
 
 
@@ -1044,9 +1386,16 @@ export function ChatLayout({
                     <MoreVertical size={20} />
                   </button>
                   <Avatar className="h-9 w-9 sm:h-10 sm:w-10">
-                    <AvatarImage src={peerProfile.avatar} />
-                    <AvatarFallback className="bg-emerald-700 text-white">
-                      {peerProfile.name.charAt(0).toUpperCase()}
+                    <AvatarImage
+                      src={peerProfile.avatar}
+                      onLoad={() => setParticipantImageLoading(false)}
+                      onError={() => setParticipantImageLoading(false)}
+                    />
+                    <AvatarFallback className={cn(
+                      "bg-emerald-700 text-white",
+                      participantImageLoading && "animate-pulse bg-zinc-600"
+                    )}>
+                      {participantImageLoading ? "" : peerProfile.name.charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
                   <div className="min-w-0">
@@ -1123,8 +1472,26 @@ export function ChatLayout({
               WebkitOverflowScrolling: "touch",
               touchAction: isSelectMode ? "none" : "pan-y",
             }}
+            onScroll={handleMessagesScroll}
             onClick={handleContainerClick}
           >
+            {(hiddenMessagesCount > 0 || hasMoreHistory) && (
+              <div className="flex justify-center py-2">
+                <button
+                  type="button"
+                  onClick={handleLoadOlder}
+                  disabled={isLoadingOlderHistory}
+                  className="text-[11px] text-zinc-300 bg-black/20 rounded-full px-3 py-1 hover:bg-black/35"
+                >
+                  {isLoadingOlderHistory
+                    ? "Loading older messages..."
+                    : hiddenMessagesCount > 0
+                    ? `Load older messages (${hiddenMessagesCount})`
+                    : "Load older messages"}
+                </button>
+              </div>
+            )}
+
             {messages.length === 0 && (
               <div className="flex items-center justify-center py-8">
                 <div className="text-xs sm:text-sm text-zinc-100/80 bg-black/20 rounded-full px-4 py-2">
@@ -1190,133 +1557,128 @@ export function ChatLayout({
             <div className="px-2 sm:px-3 py-2 sm:py-3">
               <form onSubmit={handleSendText}>
                 <div className="flex items-end gap-1.5 sm:gap-2 rounded-3xl bg-[#2a3942] px-2 sm:px-3 py-1.5">
-                  {!isRecording && (
-                    <>
-                      <Popover open={showMediaOptions} onOpenChange={setShowMediaOptions}>
-                        <PopoverTrigger asChild>
-                          <button
-                            type="button"
-                            onClick={() => setShowMediaOptions(true)}
-                            disabled={!isConnected}
-                            className="p-1.5 sm:p-2 text-zinc-300 hover:bg-white/10 rounded-full disabled:opacity-40 shrink-0 mb-0.5"
-                          >
-                            <Paperclip size={18} />
-                          </button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-48 p-2" align="start" side="top">
-                          <div className="space-y-1">
+                  <Popover open={showMediaOptions} onOpenChange={setShowMediaOptions}>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => setShowMediaOptions(true)}
+                        disabled={!isConnected}
+                        className="p-1.5 sm:p-2 text-zinc-300 hover:bg-white/10 rounded-full disabled:opacity-40 shrink-0 mb-0.5"
+                      >
+                        <Paperclip size={18} />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-48 p-2" align="start" side="top">
+                      <div className="space-y-1">
+                        <button
+                          onClick={handleCamera}
+                          className="w-full flex items-center gap-2 p-2 rounded hover:bg-white/10 text-left"
+                        >
+                          <Camera size={16} /> Camera
+                        </button>
+                        <button
+                          onClick={handleGallery}
+                          className="w-full flex items-center gap-2 p-2 rounded hover:bg-white/10 text-left"
+                        >
+                          <ImageIcon size={16} /> Gallery
+                        </button>
+                        <div className="pt-2 mt-1 border-t border-white/10">
+                          <p className="px-2 pb-1 text-[11px] text-zinc-400">Upload quality</p>
+                          <div className="grid grid-cols-2 gap-1">
                             <button
-                              onClick={handleCamera}
-                              className="w-full flex items-center gap-2 p-2 rounded hover:bg-white/10 text-left"
+                              type="button"
+                              onClick={() => setUploadQuality("standard")}
+                              className={cn(
+                                "text-xs px-2 py-1.5 rounded",
+                                uploadQuality === "standard"
+                                  ? "bg-emerald-600 text-white"
+                                  : "hover:bg-white/10 text-zinc-300"
+                              )}
                             >
-                              <Camera size={16} /> Camera
+                              Standard
                             </button>
                             <button
-                              onClick={handleGallery}
-                              className="w-full flex items-center gap-2 p-2 rounded hover:bg-white/10 text-left"
+                              type="button"
+                              onClick={() => setUploadQuality("hd")}
+                              className={cn(
+                                "text-xs px-2 py-1.5 rounded",
+                                uploadQuality === "hd"
+                                  ? "bg-emerald-600 text-white"
+                                  : "hover:bg-white/10 text-zinc-300"
+                              )}
                             >
-                              <Image size={16} /> Gallery
+                              HD
                             </button>
                           </div>
-                        </PopoverContent>
-                      </Popover>
+                        </div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
 
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <button
-                            type="button"
-                            className="p-1.5 sm:p-2 text-zinc-300 hover:bg-white/10 rounded-full shrink-0 mb-0.5"
-                          >
-                            <Smile size={18} />
-                          </button>
-                        </PopoverTrigger>
-                        <PopoverContent
-                          className="w-auto p-0"
-                          align="start"
-                          side="top"
-                        >
-                          <EmojiPicker
-                            onSelect={(emoji) =>
-                              setInputText((prev) => prev + emoji)
-                            }
-                          />
-                        </PopoverContent>
-                      </Popover>
-                    </>
-                  )}
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        className="p-1.5 sm:p-2 text-zinc-300 hover:bg-white/10 rounded-full shrink-0 mb-0.5"
+                      >
+                        <Smile size={18} />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      className="w-auto p-0"
+                      align="start"
+                      side="top"
+                    >
+                      <Suspense fallback={null}>
+                        <EmojiPicker
+                          onSelect={(emoji) =>
+                            setInputText((prev) => prev + emoji)
+                          }
+                        />
+                      </Suspense>
+                    </PopoverContent>
+                  </Popover>
 
                   <div className="flex-1 flex items-end min-h-9 sm:min-h-10 min-w-0">
-                    {isRecording ? (
-                      <div className="flex items-center gap-2 w-full py-1">
-                        <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" />
-                        <span className="text-red-400 text-sm font-mono flex-1">
-                          Recording {Math.floor(recordingTime / 60)}:
-                          {(recordingTime % 60).toString().padStart(2, "0")}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={cancelRecording}
-                          className="p-1.5 rounded-full hover:bg-red-500/20"
-                        >
-                          <X size={18} className="text-red-400" />
-                        </button>
-                      </div>
-                    ) : (
-                      <textarea
-                        ref={textareaRef}
-                        value={inputText}
-                        onChange={handleInputChange}
-                        onKeyDown={handleKeyDown}
-                        placeholder={
-                          isConnected ? "Message" : "Connecting..."
-                        }
-                        disabled={!isConnected}
-                        rows={1}
-                        className={cn(
-                          "flex-1 bg-transparent text-[15px] leading-[1.5] text-zinc-100",
-                          "w-full resize-none overflow-x-hidden chat-textarea",
-                          "placeholder:text-zinc-500",
-                          "py-1.5",
-                          "border-none outline-none ring-0",
-                          "focus:outline-none focus:ring-0 focus:border-none focus:shadow-none"
-                        )}
-                        style={{ 
-                          height: "24px",
-                          minHeight: "24px",
-                          maxHeight: "144px",
-                          border: "none",
-                          boxShadow: "none",
-                        }}
-                      />
-                    )}
+                    <textarea
+                      ref={textareaRef}
+                      value={inputText}
+                      onChange={handleInputChange}
+                      onKeyDown={handleKeyDown}
+                      placeholder={
+                        isConnected
+                          ? isAppVisible
+                            ? "Message"
+                            : "Background mode"
+                          : "Connecting..."
+                      }
+                      disabled={!isConnected}
+                      rows={1}
+                      className={cn(
+                        "flex-1 bg-transparent text-[15px] leading-[1.5] text-zinc-100",
+                        "w-full resize-none overflow-x-hidden chat-textarea",
+                        "placeholder:text-zinc-500",
+                        "py-1.5",
+                        "border-none outline-none ring-0",
+                        "focus:outline-none focus:ring-0 focus:border-none focus:shadow-none"
+                      )}
+                      style={{ 
+                        height: "24px",
+                        minHeight: "24px",
+                        maxHeight: "144px",
+                        border: "none",
+                        boxShadow: "none",
+                      }}
+                    />
                   </div>
 
-                  {isRecording ? (
-                    <button
-                      type="button"
-                      onClick={handleStopRecording}
-                      className="p-2 sm:p-2.5 rounded-full bg-red-500 shrink-0 hover:bg-red-600"
-                    >
-                      <Square size={18} className="text-white" fill="white" />
-                    </button>
-                  ) : inputText.trim() ? (
-                    <button
-                      type="submit"
-                      disabled={!isConnected}
-                      className="p-2 sm:p-2.5 rounded-full bg-emerald-600 shrink-0 hover:bg-emerald-700 disabled:opacity-40"
-                    >
-                      <Send size={18} className="text-white" />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleStartRecording}
-                      disabled={!isConnected}
-                      className="p-2 sm:p-2.5 text-zinc-300 hover:bg-white/10 rounded-full disabled:opacity-40 shrink-0"
-                    >
-                      <Mic size={18} />
-                    </button>
-                  )}
+                  <button
+                    type="submit"
+                    disabled={!isConnected || !inputText.trim()}
+                    className="p-2 sm:p-2.5 rounded-full bg-emerald-600 shrink-0 hover:bg-emerald-700 disabled:opacity-40"
+                  >
+                    <Send size={18} className="text-white" />
+                  </button>
                 </div>
               </form>
             </div>
@@ -1326,3 +1688,4 @@ export function ChatLayout({
     </div>
   );
 }
+

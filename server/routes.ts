@@ -25,6 +25,8 @@ const wp = webpush as any;
 
 
 const FIXED_ROOM_ID = "secure-room-001";
+const DEFAULT_HISTORY_PAGE_SIZE = 120;
+const MAX_HISTORY_PAGE_SIZE = 300;
 
 // Gatekeeper key from environment or fallback
 const GATEKEEPER_KEY = process.env.GATEKEEPER_KEY || "secret";
@@ -158,6 +160,7 @@ interface InMemoryMessage {
 
 const rooms = new Map<string, RoomData>();
 const pendingMessages = new Map<string, InMemoryMessage[]>();
+const inMemorySeenMessageIds = new Map<string, number>();
 
 // ---------- USER HELPERS ----------
 
@@ -307,6 +310,39 @@ async function getMessageStatus(
 
   return msg.delivered ? "delivered" : "sent";
 }
+
+const parseHistoryCursor = (
+  rawCursor?: string | string[]
+): { timestamp: Date; id: string } | null => {
+  const cursor = Array.isArray(rawCursor) ? rawCursor[0] : rawCursor;
+  if (!cursor) return null;
+  const separatorIndex = cursor.indexOf(":");
+  if (separatorIndex <= 0 || separatorIndex >= cursor.length - 1) return null;
+  const timestampMs = Number(cursor.slice(0, separatorIndex));
+  const id = cursor.slice(separatorIndex + 1);
+  if (!Number.isFinite(timestampMs) || !id || id.length > 64) return null;
+  return {
+    timestamp: new Date(timestampMs),
+    id,
+  };
+};
+
+const sendMessageQueuedAck = (
+  ws: WebSocket,
+  messageId: string,
+  status: "sent" | "delivered" | "read",
+  idempotent: boolean
+) => {
+  if (ws.readyState !== WebSocket.OPEN) return;
+  ws.send(
+    JSON.stringify({
+      type: "message-queued",
+      id: messageId,
+      status,
+      idempotent,
+    })
+  );
+};
 
 // ---------- MAIN REGISTER ROUTES ----------
 
@@ -768,111 +804,6 @@ export async function registerRoutes(
     }
   });
 
-  // -------- UPLOAD (CLOUDINARY) --------
-
-  // Get upload config for direct client upload
-  app.get("/api/upload/config", async (req, res) => {
-    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-    const apiKey = process.env.CLOUDINARY_API_KEY;
-    const apiSecret = process.env.CLOUDINARY_API_SECRET;
-
-    if (!cloudName || !apiKey || !apiSecret) {
-      return res.status(503).json({ error: "Cloudinary not configured" });
-    }
-
-    const timestamp = Math.floor(Date.now() / 1000);
-    const folder = "pyqmaster";
-    
-    const crypto = await import("crypto");
-    const signatureString = `folder=${folder}&timestamp=${timestamp}${apiSecret}`;
-    const signature = crypto.createHash("sha1").update(signatureString).digest("hex");
-
-    return res.json({
-      cloudName,
-      apiKey,
-      timestamp,
-      signature,
-    });
-  });
-
-  app.post("/api/upload", async (req, res) => {
-    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-    const apiKey = process.env.CLOUDINARY_API_KEY;
-    const apiSecret = process.env.CLOUDINARY_API_SECRET;
-
-    console.log("[UPLOAD] Checking config:", { 
-      hasCloudName: !!cloudName, 
-      hasApiKey: !!apiKey, 
-      hasApiSecret: !!apiSecret 
-    });
-
-    if (!cloudName || !apiKey || !apiSecret) {
-      return res.status(503).json({
-        success: false,
-        error: "Media upload is disabled (Cloudinary not configured).",
-      });
-    }
-
-    try {
-      const { data, type } = req.body;
-
-      if (!data || typeof data !== "string") {
-        return res.status(400).json({ success: false, error: "No data provided" });
-      }
-
-      const dataSize = Math.round(data.length / 1024);
-      console.log(`[UPLOAD] Starting ${type} upload, size: ${dataSize}KB`);
-
-      const timestamp = Math.floor(Date.now() / 1000);
-      const folder = "pyqmaster";
-      const resourceType = type === "video" ? "video" : type === "audio" ? "video" : "image";
-
-      // Create signature (alphabetical order of params)
-      const crypto = await import("crypto");
-      const signatureString = `folder=${folder}&timestamp=${timestamp}${apiSecret}`;
-      const signature = crypto.createHash("sha1").update(signatureString).digest("hex");
-
-      // Use form-urlencoded format
-      const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
-      
-      const params = new URLSearchParams();
-      params.append("file", data);
-      params.append("api_key", apiKey);
-      params.append("timestamp", String(timestamp));
-      params.append("signature", signature);
-      params.append("folder", folder);
-
-      console.log(`[UPLOAD] Sending to Cloudinary...`);
-
-      const uploadResponse = await fetch(uploadUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: params.toString(),
-      });
-
-      const responseText = await uploadResponse.text();
-      console.log(`[UPLOAD] Response status: ${uploadResponse.status}`);
-      
-      if (!uploadResponse.ok) {
-        console.error("[UPLOAD] Cloudinary error:", responseText);
-        return res.status(500).json({ success: false, error: "Upload failed" });
-      }
-
-      const result = JSON.parse(responseText);
-      console.log(`[UPLOAD] Success: ${result.secure_url}`);
-
-      return res.json({
-        success: true,
-        mediaUrl: result.secure_url,
-      });
-    } catch (error) {
-      console.error("[UPLOAD] Error:", error);
-      return res.status(500).json({ success: false, error: "Upload failed" });
-    }
-  });
-
   // -------- PUSH NOTIFICATIONS --------
 
   app.get("/api/push/vapid-key", (req, res) => {
@@ -964,29 +895,74 @@ export async function registerRoutes(
 
   app.get("/api/messages/:roomId", async (req, res) => {
     const { roomId } = req.params;
-    const { userType } = req.query;
+    const userTypeRaw = Array.isArray(req.query.userType)
+      ? req.query.userType[0]
+      : req.query.userType;
 
-    if (!userType || (userType !== "admin" && userType !== "friend")) {
+    if (!userTypeRaw || (userTypeRaw !== "admin" && userTypeRaw !== "friend")) {
       return res.status(400).json({ error: "Invalid userType" });
     }
 
+    const parsedCursor = parseHistoryCursor(req.query.cursor as string | string[] | undefined);
+    if (req.query.cursor && !parsedCursor) {
+      return res.status(400).json({ error: "Invalid cursor" });
+    }
+
+    const rawLimit = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
+    const requestedLimit = Number.parseInt(String(rawLimit || DEFAULT_HISTORY_PAGE_SIZE), 10);
+    const pageSize = Math.min(
+      MAX_HISTORY_PAGE_SIZE,
+      Math.max(1, Number.isFinite(requestedLimit) ? requestedLimit : DEFAULT_HISTORY_PAGE_SIZE)
+    );
+
     if (!hasDatabase || !db) {
-      return res.json({ messages: [], syncTimestamp: Date.now() });
+      return res.json({
+        messages: [],
+        syncTimestamp: Date.now(),
+        nextCursor: null,
+        hasMore: false,
+      });
     }
 
     try {
-      const userId =
-        userType === "admin" ? adminUserId : friendUserId;
-      const peerId =
-        userType === "admin" ? friendUserId : adminUserId;
+      const userId = userTypeRaw === "admin" ? adminUserId : friendUserId;
+      const peerId = userTypeRaw === "admin" ? friendUserId : adminUserId;
 
-      const dbMessages = await db.query.messages.findMany({
-        where: and(
-          eq(schema.messages.roomId, roomId),
-          eq(schema.messages.isDeleted, false)
-        ),
-        orderBy: schema.messages.timestamp,
+      const baseWhere = and(
+        eq(schema.messages.roomId, roomId),
+        eq(schema.messages.isDeleted, false)
+      );
+
+      const whereClause = parsedCursor
+        ? and(
+            baseWhere,
+            or(
+              lt(schema.messages.timestamp, parsedCursor.timestamp),
+              and(
+                eq(schema.messages.timestamp, parsedCursor.timestamp),
+                lt(schema.messages.id, parsedCursor.id)
+              )
+            )
+          )
+        : baseWhere;
+
+      const dbMessagesDesc = await db.query.messages.findMany({
+        where: whereClause,
+        orderBy: (messages: any, { desc }: any) => [
+          desc(messages.timestamp),
+          desc(messages.id),
+        ],
+        limit: pageSize + 1,
       });
+
+      const hasMore = dbMessagesDesc.length > pageSize;
+      const pageDesc = hasMore ? dbMessagesDesc.slice(0, pageSize) : dbMessagesDesc;
+      const dbMessages = [...pageDesc].reverse();
+
+      const nextCursor =
+        hasMore && dbMessages.length > 0
+          ? `${dbMessages[0].timestamp.getTime()}:${dbMessages[0].id}`
+          : null;
 
       const replyIds = dbMessages
         .filter((msg: any) => msg.replyToId)
@@ -1002,11 +978,9 @@ export async function registerRoutes(
             })
           : [];
 
-      const replyMap = new Map(
-        replyMessages.map((r: any) => [r.id, r])
-      );
+      const replyMap = new Map(replyMessages.map((r: any) => [r.id, r]));
 
-      // Fetch all read receipts for messages in this room
+      // Fetch all read receipts for messages in this page only.
       const messageIds = dbMessages.map((msg: any) => msg.id);
       const readReceipts =
         messageIds.length > 0
@@ -1015,7 +989,6 @@ export async function registerRoutes(
             })
           : [];
 
-      // Build a map: messageId -> Set of userIds who read it
       const readByMap = new Map<string, Set<string>>();
       for (const receipt of readReceipts) {
         if (!readByMap.has(receipt.messageId)) {
@@ -1038,21 +1011,16 @@ export async function registerRoutes(
               })()
             : undefined;
 
-        // Determine status: read > delivered > sent
-        // For my messages: "read" if peer has read it
-        // For their messages: "read" if I have read it
         let status: "sent" | "delivered" | "read" = "sent";
         const readers = readByMap.get(msg.id);
 
         if (isSender) {
-          // My message: check if peer read it
           if (readers?.has(peerId)) {
             status = "read";
           } else if (msg.delivered) {
             status = "delivered";
           }
         } else {
-          // Their message: check if I read it
           if (readers?.has(userId)) {
             status = "read";
           } else if (msg.delivered) {
@@ -1076,6 +1044,8 @@ export async function registerRoutes(
       res.json({
         messages: formatted,
         syncTimestamp: Date.now(),
+        nextCursor,
+        hasMore,
       });
     } catch (error) {
       console.error("Failed to fetch messages:", error);
@@ -1157,6 +1127,8 @@ export async function registerRoutes(
     let myUserType: "admin" | "friend" | null = null;
     let myDeviceId: string | null = null;
     let lastSyncTimestamp = 0;
+    let heartbeatInterval: NodeJS.Timeout | null = null;
+    let lastHeartbeat = Date.now();
 
     ws.on("message", async (message) => {
       try {
@@ -1452,28 +1424,44 @@ export async function registerRoutes(
           const messageType: string = data.messageType || "text";
 
           let expiresAt: Date | null = null;
+          let isDuplicateRetry = false;
+          let messageDelivered = peerOnline;
+          let existingMessage: any = null;
 
           if (hasDatabase && db) {
             try {
-              const retention =
-                await db.query.messageRetention.findFirst({
-                  where: eq(schema.messageRetention.roomId, currentRoom),
-                });
-
-              const retentionMode =
-                retention?.retentionMode || "forever";
-
-              if (retentionMode === "1h") {
-                expiresAt = new Date(Date.now() + 60 * 60 * 1000);
-              } else if (retentionMode === "24h") {
-                expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-              }
-
               const existing = await db.query.messages.findFirst({
                 where: eq(schema.messages.id, msgId),
               });
 
-              if (!existing) {
+              if (existing) {
+                existingMessage = existing;
+                if (existing.senderId !== myUserId || existing.roomId !== currentRoom) {
+                  ws.send(
+                    JSON.stringify({
+                      type: "error",
+                      message: "Message ID conflict",
+                    })
+                  );
+                  return;
+                }
+                isDuplicateRetry = true;
+                messageDelivered = Boolean(existing.delivered);
+              } else {
+                const retention =
+                  await db.query.messageRetention.findFirst({
+                    where: eq(schema.messageRetention.roomId, currentRoom),
+                  });
+
+                const retentionMode =
+                  retention?.retentionMode || "forever";
+
+                if (retentionMode === "1h") {
+                  expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+                } else if (retentionMode === "24h") {
+                  expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+                }
+
                 await db.insert(schema.messages).values({
                   id: msgId,
                   roomId: currentRoom,
@@ -1493,24 +1481,95 @@ export async function registerRoutes(
                   expiresAt,
                 });
               }
-            } catch (err) {
-              console.error("Failed to save message:", err);
+            } catch (err: any) {
+              // Handle concurrent retries inserting same ID across devices.
+              if (err?.code === "23505") {
+                const concurrentExisting = await db.query.messages.findFirst({
+                  where: eq(schema.messages.id, msgId),
+                });
+                if (concurrentExisting) {
+                  existingMessage = concurrentExisting;
+                  isDuplicateRetry = true;
+                  messageDelivered = Boolean(concurrentExisting.delivered);
+                }
+              } else {
+                console.error("Failed to save message:", err);
+              }
             }
           } else {
             // memory-only fallback
-            const pendingKey = `${currentRoom}_${peerUserType}`;
-            const pending = pendingMessages.get(pendingKey) || [];
-            pending.push({
-              id: msgId,
-              text: sanitizedText,
-              messageType,
-              mediaUrl: sanitizedMediaUrl,
-              timestamp: timestampMs,
-              senderName,
-              senderId: myUserId,
-              receiverId: peerUserId,
-            });
-            pendingMessages.set(pendingKey, pending);
+            const dedupeKey = `${currentRoom}:${msgId}`;
+            if (inMemorySeenMessageIds.has(dedupeKey)) {
+              isDuplicateRetry = true;
+            } else {
+              inMemorySeenMessageIds.set(dedupeKey, Date.now());
+              if (inMemorySeenMessageIds.size > 5000) {
+                const oldestKey = inMemorySeenMessageIds.keys().next().value;
+                if (oldestKey) {
+                  inMemorySeenMessageIds.delete(oldestKey);
+                }
+              }
+
+              const pendingKey = `${currentRoom}_${peerUserType}`;
+              const pending = pendingMessages.get(pendingKey) || [];
+              pending.push({
+                id: msgId,
+                text: sanitizedText,
+                messageType,
+                mediaUrl: sanitizedMediaUrl,
+                timestamp: timestampMs,
+                senderName,
+                senderId: myUserId,
+                receiverId: peerUserId,
+              });
+              pendingMessages.set(pendingKey, pending);
+            }
+          }
+
+          if (isDuplicateRetry) {
+            if (hasDatabase && db && peerOnline && !messageDelivered) {
+              try {
+                const updated = await db
+                  .update(schema.messages)
+                  .set({ delivered: true })
+                  .where(
+                    and(
+                      eq(schema.messages.id, msgId),
+                      eq(schema.messages.delivered, false)
+                    )
+                  )
+                  .returning({ id: schema.messages.id });
+
+                if (updated.length > 0) {
+                  messageDelivered = true;
+                  broadcastToUserAll(peerUserId, {
+                    type: "chat-message",
+                    id: msgId,
+                    text: existingMessage?.text || sanitizedText,
+                    messageType: existingMessage?.messageType || messageType,
+                    mediaUrl: existingMessage?.mediaUrl || sanitizedMediaUrl,
+                    timestamp: existingMessage?.timestamp
+                      ? new Date(existingMessage.timestamp).getTime()
+                      : timestampMs,
+                    senderName: existingMessage?.senderId === adminUserId ? "Admin" : "Friend",
+                    replyTo: data.replyTo || undefined,
+                    sender: "them",
+                    status: "delivered",
+                  });
+                  broadcastToUserAll(myUserId, {
+                    type: "message_update",
+                    ids: [msgId],
+                    status: "delivered",
+                  });
+                }
+              } catch (err) {
+                console.error("Failed to deliver duplicate retry:", err);
+              }
+            }
+
+            const duplicateStatus = messageDelivered ? "delivered" : "sent";
+            sendMessageQueuedAck(ws, msgId, duplicateStatus, true);
+            return;
           }
 
           // base payload for realtime
@@ -1524,6 +1583,8 @@ export async function registerRoutes(
             senderName,
             replyTo: data.replyTo || undefined,
           };
+
+          sendMessageQueuedAck(ws, msgId, "sent", false);
 
           // 1) SENT tick (only to sender devices)
           broadcastToUserAll(myUserId, {
@@ -1547,6 +1608,7 @@ export async function registerRoutes(
                   .update(schema.messages)
                   .set({ delivered: true })
                   .where(eq(schema.messages.id, msgId));
+                messageDelivered = true;
               } catch (err) {
                 console.error(
                   "Failed to mark delivered in DB:",
@@ -1636,11 +1698,11 @@ export async function registerRoutes(
           broadcastToUser(
             myUserId,
             {
-              ...basePayload,
-              sender: "me",
-              status: peerOnline ? "delivered" : "sent",
-            },
-            ws
+                ...basePayload,
+                sender: "me",
+                status: messageDelivered ? "delivered" : "sent",
+              },
+              ws
           );
 
           // 4) Echo to current device
@@ -1648,7 +1710,7 @@ export async function registerRoutes(
             JSON.stringify({
               ...basePayload,
               sender: "me",
-              status: peerOnline ? "delivered" : "sent",
+              status: messageDelivered ? "delivered" : "sent",
             })
           );
 
@@ -1958,6 +2020,7 @@ export async function registerRoutes(
 
     try {
       await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_messages_room_deleted_timestamp ON messages(room_id, is_deleted, timestamp)`);
+      await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_messages_room_deleted_timestamp_id ON messages(room_id, is_deleted, timestamp, id)`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages(expires_at) WHERE expires_at IS NOT NULL`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_message_reads_message_user ON message_reads(message_id, user_id)`);
       await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`);
