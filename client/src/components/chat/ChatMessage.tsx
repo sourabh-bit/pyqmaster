@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Check, CheckCheck, Clock, Reply } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -30,6 +30,13 @@ interface Props {
   onSwipeReply: (msg: Message) => void;
 }
 
+const fallbackCloudinaryImageUrl = (url: string) => {
+  if (!url) return url;
+  if (!url.includes("/image/upload/")) return url;
+  if (url.includes("/image/upload/f_auto")) return url;
+  return url.replace("/image/upload/", "/image/upload/f_auto,q_auto:good/");
+};
+
 // Memoize with custom comparison to prevent unnecessary re-renders
 export default memo(function ChatMessage({
   message: msg,
@@ -54,6 +61,8 @@ export default memo(function ChatMessage({
   const [swipeOffsetPointer, setSwipeOffsetPointer] = useState(0);
   const [replyTriggered, setReplyTriggered] = useState(false);
   const [replyTriggeredPointer, setReplyTriggeredPointer] = useState(false);
+  const [imageSrc, setImageSrc] = useState(msg.mediaUrl ?? "");
+  const [triedImageFallback, setTriedImageFallback] = useState(false);
 
   const handleClick = useCallback(() => {
     if (isSelectMode) {
@@ -186,6 +195,26 @@ export default memo(function ChatMessage({
     [isSelectMode, msg, onReply]
   );
 
+  useEffect(() => {
+    setImageSrc(msg.mediaUrl ?? "");
+    setTriedImageFallback(false);
+  }, [msg.mediaUrl]);
+
+  const handleImageError = useCallback(() => {
+    if (!msg.mediaUrl || triedImageFallback) return;
+    const fallbackUrl = fallbackCloudinaryImageUrl(msg.mediaUrl);
+    if (fallbackUrl && fallbackUrl !== imageSrc) {
+      setImageSrc(fallbackUrl);
+      setTriedImageFallback(true);
+      return;
+    }
+    const stripped = msg.mediaUrl.split("?")[0];
+    if (stripped && stripped !== imageSrc) {
+      setImageSrc(stripped);
+    }
+    setTriedImageFallback(true);
+  }, [imageSrc, msg.mediaUrl, triedImageFallback]);
+
   return (
     <div
       ref={containerRef}
@@ -266,13 +295,14 @@ export default memo(function ChatMessage({
 
         {msg.type === "image" && msg.mediaUrl && (
           <img
-            src={msg.mediaUrl}
+            src={imageSrc}
             alt="Shared image"
             className="rounded-xl max-h-72 w-full object-cover mt-1 cursor-pointer"
             onClick={handleMediaClick}
             draggable={false}
             loading="lazy"
             decoding="async"
+            onError={handleImageError}
           />
         )}
 

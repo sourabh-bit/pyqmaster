@@ -119,24 +119,6 @@ export function ActiveCallOverlay({
     [getPreviewBounds]
   );
 
-  const snapToNearestCorner = useCallback(
-    (x: number, y: number, previewWidth: number, previewHeight: number) => {
-      const bounds = getPreviewBounds(previewWidth, previewHeight);
-      const corners = [
-        { x: bounds.minX, y: bounds.minY },
-        { x: bounds.maxX, y: bounds.minY },
-        { x: bounds.minX, y: bounds.maxY },
-        { x: bounds.maxX, y: bounds.maxY },
-      ];
-      return corners.reduce((closest, corner) => {
-        const cornerDistance = (corner.x - x) ** 2 + (corner.y - y) ** 2;
-        const closestDistance = (closest.x - x) ** 2 + (closest.y - y) ** 2;
-        return cornerDistance < closestDistance ? corner : closest;
-      }, corners[0]);
-    },
-    [getPreviewBounds]
-  );
-
   useEffect(() => {
     const mediaQuery = window.matchMedia("(max-width: 767px)");
     const applyLayout = (matches: boolean) => setIsMobileLayout(matches);
@@ -313,15 +295,8 @@ export function ActiveCallOverlay({
       dragStateRef.current = null;
       return;
     }
-    const snapped = snapToNearestCorner(
-      localPreviewPosition?.x ?? state.originX,
-      localPreviewPosition?.y ?? state.originY,
-      element.offsetWidth,
-      element.offsetHeight
-    );
-    setLocalPreviewPosition(snapped);
     dragStateRef.current = null;
-  }, [isMobileLayout, localPreviewPosition, snapToNearestCorner]);
+  }, [isMobileLayout]);
 
   const handleLocalPreviewPointerCancel = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const state = dragStateRef.current;
@@ -434,9 +409,9 @@ export function ActiveCallOverlay({
         <div 
           ref={localPreviewRef}
           className={cn(
-            "absolute bg-black/80 rounded-2xl border-2 border-white/20 overflow-hidden shadow-2xl z-20 cursor-pointer",
+            "absolute bg-black/85 rounded-2xl border-2 border-white/25 overflow-hidden shadow-2xl z-20 cursor-pointer",
             isMobileLayout
-              ? "w-[52vw] min-w-[176px] max-w-[240px] aspect-video touch-none"
+              ? "w-[42vw] min-w-[156px] max-w-[216px] aspect-[3/4] touch-none rounded-[26px]"
               : "bottom-32 sm:bottom-36 right-3 sm:right-4 w-28 h-36 sm:w-36 sm:h-48"
           )}
           style={
@@ -455,7 +430,7 @@ export function ActiveCallOverlay({
             autoPlay
             muted
             playsInline
-            className="w-full h-full object-cover"
+            className={cn("w-full h-full", isMobileLayout ? "object-cover object-center" : "object-cover")}
             style={{ transform: 'none' }}
           />
           {isVideoOff && (

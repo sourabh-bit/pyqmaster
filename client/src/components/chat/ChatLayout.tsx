@@ -470,6 +470,14 @@ export function ChatLayout({
 
   const toMb = useCallback((bytes: number) => (bytes / (1024 * 1024)).toFixed(2), []);
 
+  const normalizeUploadedMediaUrl = useCallback((url: string, fileType: string) => {
+    if (!url) return url;
+    if (!fileType.startsWith("image/")) return url;
+    if (!url.includes("/image/upload/")) return url;
+    if (url.includes("/image/upload/f_auto")) return url;
+    return url.replace("/image/upload/", "/image/upload/f_auto,q_auto:good/");
+  }, []);
+
   const emitUploadProgress = useCallback((payload: UploadProgressPayload) => {
     window.dispatchEvent(new CustomEvent("chat-upload-progress", { detail: payload }));
   }, []);
@@ -815,16 +823,23 @@ export function ChatLayout({
               }
 
               const data = JSON.parse(text);
-              if (!data?.secure_url) {
+              const rawUrl =
+                typeof data?.secure_url === "string"
+                  ? data.secure_url
+                  : typeof data?.url === "string"
+                  ? data.url
+                  : "";
+              if (!rawUrl) {
                 throw new Error("Cloudinary response missing secure_url");
               }
+              const deliverUrl = normalizeUploadedMediaUrl(rawUrl, file.type);
               emitUploadProgress({
                 fileName: file.name,
                 stage: "success",
                 progress: 100,
                 attempt,
               });
-              return data.secure_url as string;
+              return deliverUrl;
             } catch (err) {
               lastError = err;
               console.error(`[UPLOAD] attempt ${attempt} failed`, err);
@@ -870,6 +885,7 @@ export function ChatLayout({
       emitUploadProgress,
       waitForOnline,
       waitForVisible,
+      normalizeUploadedMediaUrl,
       compressImage,
       wait,
       toast,
