@@ -348,6 +348,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const maxReconnectAttempts = useRef(10);
   const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastHeartbeatRef = useRef<number>(Date.now());
+  const visibilityCloseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (userType === 'admin') {
@@ -360,6 +361,38 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       }
     }
   }, [userType]);
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden) {
+        if (visibilityCloseTimeoutRef.current) clearTimeout(visibilityCloseTimeoutRef.current);
+        visibilityCloseTimeoutRef.current = setTimeout(() => {
+          // Only close socket when not on an active call
+          if (callStatusRef.current !== 'connected' && callStatusRef.current !== 'calling') {
+            try {
+              wsRef.current?.close();
+            } catch {}
+          }
+        }, 5500);
+      } else {
+        if (visibilityCloseTimeoutRef.current) {
+          clearTimeout(visibilityCloseTimeoutRef.current);
+          visibilityCloseTimeoutRef.current = null;
+        }
+        // Kick presence immediately on return
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          connect();
+        } else {
+          sendSignal({ type: 'typing', isTyping: false });
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      if (visibilityCloseTimeoutRef.current) clearTimeout(visibilityCloseTimeoutRef.current);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [connect, sendSignal]);
 
   // Fetch BOTH own profile AND peer profile from server on mount (source of truth)
   useEffect(() => {
@@ -2514,13 +2547,18 @@ ws.onclose = () => {
     };
   }, [userType, mergeMessagesById]);
 
-useEffect(() => {
-  connect();
+  useEffect(() => {
+    connect();
 
-  return () => {
-    cleanupCall(false, "hook-unmount");
+    return () => {
+      cleanupCall(false, "hook-unmount");
 
-    isIntentionalClose.current = true;
+      if (visibilityCloseTimeoutRef.current) {
+        clearTimeout(visibilityCloseTimeoutRef.current);
+        visibilityCloseTimeoutRef.current = null;
+      }
+
+      isIntentionalClose.current = true;
 
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);

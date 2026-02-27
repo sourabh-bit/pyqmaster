@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { PYQView } from "@/components/disguise/PYQView";
 import { CalculatorView } from "@/components/disguise/CalculatorView";
 import { LoginOverlay } from "@/components/auth/LoginOverlay";
@@ -12,37 +12,73 @@ export default function Home() {
   const [showLogin, setShowLogin] = useState(false);
   const [currentUser, setCurrentUser] = useState<'admin' | 'friend'>('friend');
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const lastActiveRef = useRef<number>(Date.now());
+
+  const SESSION_KEY = "chat_auth_user";
+  const SESSION_TS_KEY = "chat_auth_ts";
+  const SESSION_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('mode') === 'calc') {
       setDisguiseType('calc');
     }
+
+    // Auto-restore last session if still fresh
+    const savedUser = localStorage.getItem(SESSION_KEY) as 'admin' | 'friend' | null;
+    const savedTs = Number(localStorage.getItem(SESSION_TS_KEY) || 0);
+    if (savedUser && savedTs && Date.now() - savedTs < SESSION_TTL_MS) {
+      setCurrentUser(savedUser);
+      setMode('chat');
+      setShowLogin(false);
+    }
   }, []);
 
   // Auto lock on inactivity
   useEffect(() => {
     let timeout: NodeJS.Timeout;
+    const lockDelayMs = 1000 * 60 * 20; // 20 minutes of inactivity
 
     const resetTimer = () => {
       clearTimeout(timeout);
+      lastActiveRef.current = Date.now();
       if (mode === "chat") {
         timeout = setTimeout(() => {
           setMode("disguise");
           setShowLogin(false);
-        }, 1000 * 60 * 5);
+        }, lockDelayMs);
       }
     };
 
     window.addEventListener("mousemove", resetTimer);
     window.addEventListener("keypress", resetTimer);
     window.addEventListener("touchstart", resetTimer);
+    const handleVisibility = () => {
+      if (document.hidden) {
+        clearTimeout(timeout);
+      } else if (mode === "chat") {
+        const elapsed = Date.now() - lastActiveRef.current;
+        if (elapsed >= lockDelayMs) {
+          setMode("disguise");
+          setShowLogin(false);
+          setShowAdminPanel(false);
+          setCurrentUser("friend");
+        } else {
+          timeout = setTimeout(() => {
+            setMode("disguise");
+            setShowLogin(false);
+          }, lockDelayMs - elapsed);
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
       clearTimeout(timeout);
       window.removeEventListener("mousemove", resetTimer);
       window.removeEventListener("keypress", resetTimer);
       window.removeEventListener("touchstart", resetTimer);
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [mode]);
 
@@ -53,6 +89,8 @@ export default function Home() {
     setMode("chat");
     setShowAdminPanel(false);
     setShowLogin(false);
+    localStorage.setItem(SESSION_KEY, userType);
+    localStorage.setItem(SESSION_TS_KEY, Date.now().toString());
   };
 
   const handlePanicLock = () => {
@@ -60,6 +98,8 @@ export default function Home() {
     setShowLogin(false);
     setShowAdminPanel(false);
     setCurrentUser("friend");
+    localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(SESSION_TS_KEY);
   };
 
   // Admin shortcut
