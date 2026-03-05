@@ -6,9 +6,6 @@ import { ChatLayout } from "@/components/chat/ChatLayout";
 import { AdminPanel } from "@/components/admin/AdminPanel";
 import { Toaster } from "@/components/ui/toaster";
 
-const AUTH_SESSION_KEY = "chat_unlocked_session_v1";
-const AUTH_SESSION_TTL_MS = 1000 * 60 * 60 * 24;
-
 export default function Home() {
   const AUTO_LOCK_TIMEOUT_MS = 0; // set > 0 to enable inactivity lock
   const [mode, setMode] = useState<'disguise' | 'chat'>('disguise');
@@ -21,24 +18,6 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search);
     if (params.get('mode') === 'calc') {
       setDisguiseType('calc');
-    }
-
-    try {
-      const raw = localStorage.getItem(AUTH_SESSION_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as { userType?: "admin" | "friend"; at?: number };
-      const age = Date.now() - (parsed?.at ?? 0);
-      if (!parsed?.at || age > AUTH_SESSION_TTL_MS) {
-        localStorage.removeItem(AUTH_SESSION_KEY);
-        return;
-      }
-      if (parsed?.userType === "admin" || parsed?.userType === "friend") {
-        setCurrentUser(parsed.userType);
-        setMode("chat");
-        setShowLogin(false);
-      }
-    } catch {
-      localStorage.removeItem(AUTH_SESSION_KEY);
     }
   }, []);
 
@@ -89,10 +68,6 @@ export default function Home() {
     setMode("chat");
     setShowAdminPanel(false);
     setShowLogin(false);
-    localStorage.setItem(
-      AUTH_SESSION_KEY,
-      JSON.stringify({ userType, at: Date.now() })
-    );
   };
 
   const handlePanicLock = () => {
@@ -100,7 +75,6 @@ export default function Home() {
     setShowLogin(false);
     setShowAdminPanel(false);
     setCurrentUser("friend");
-    localStorage.removeItem(AUTH_SESSION_KEY);
   };
 
   // Admin shortcut
