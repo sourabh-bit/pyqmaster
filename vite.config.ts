@@ -3,29 +3,20 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import { metaImagesPlugin } from "./vite-plugin-meta-images";
+import runtimeErrorModal from "@replit/vite-plugin-runtime-error-modal";
+import { cartographer } from "@replit/vite-plugin-cartographer";
+import { devBanner } from "@replit/vite-plugin-dev-banner";
 
 const isReplit = process.env.REPL_ID !== undefined;
 const rootDir = process.cwd();
 
-export default defineConfig(async () => {
-  const plugins = [react(), tailwindcss(), metaImagesPlugin()];
-
-  if (isReplit) {
-    const [runtimeErrorModal, cartographer, devBanner] = await Promise.all([
-      import("@replit/vite-plugin-runtime-error-modal"),
-      import("@replit/vite-plugin-cartographer"),
-      import("@replit/vite-plugin-dev-banner"),
-    ]);
-
-    plugins.push(
-      runtimeErrorModal.default(),
-      cartographer.cartographer(),
-      devBanner.devBanner()
-    );
-  }
-
-  return {
-    plugins,
+export default defineConfig({
+  plugins: [
+    react(),
+    tailwindcss(),
+    metaImagesPlugin(),
+    ...(isReplit ? [runtimeErrorModal(), cartographer(), devBanner()] : []),
+  ],
     resolve: {
       alias: {
         "@": path.resolve(rootDir, "client", "src"),
@@ -68,5 +59,4 @@ export default defineConfig(async () => {
         deny: ["**/.*"],
       },
     },
-  };
 });

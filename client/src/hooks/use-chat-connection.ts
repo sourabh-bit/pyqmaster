@@ -493,6 +493,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const wsRef = useRef<WebSocket | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
   const isMakingOfferRef = useRef(false);
   const isRecoveringRef = useRef(false);
@@ -909,6 +910,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     }
 
     setLocalStream(null);
+    remoteStreamRef.current = null;
     setRemoteStream(null);
     setActiveCall(null);
     setIncomingCall(null);
@@ -1423,9 +1425,40 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     };
 
     peer.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        setRemoteStream(event.streams[0]);
+      if (!remoteStreamRef.current) {
+        remoteStreamRef.current = new MediaStream();
       }
+
+      const mergedRemote = remoteStreamRef.current;
+      const attachTrack = (track: MediaStreamTrack) => {
+        const alreadyExists = mergedRemote
+          .getTracks()
+          .some((existing) => existing.id === track.id);
+        if (!alreadyExists) {
+          mergedRemote.addTrack(track);
+        }
+        track.onended = () => {
+          try {
+            mergedRemote.removeTrack(track);
+          } catch {
+            // ignore remove errors
+          }
+          const remaining = mergedRemote.getTracks();
+          setRemoteStream(
+            remaining.length > 0 ? new MediaStream(remaining) : null
+          );
+        };
+      };
+
+      if (event.streams && event.streams.length > 0) {
+        event.streams.forEach((streamItem) => {
+          streamItem.getTracks().forEach((track) => attachTrack(track));
+        });
+      } else if (event.track) {
+        attachTrack(event.track);
+      }
+
+      setRemoteStream(new MediaStream(mergedRemote.getTracks()));
     };
 
     peer.onconnectionstatechange = () => {
