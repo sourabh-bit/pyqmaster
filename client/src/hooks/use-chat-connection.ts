@@ -117,31 +117,98 @@ const normalizeHistoryMessages = (input: any[]): Message[] => {
           }));
 };
 
+const parseEnvList = (value?: string) =>
+  (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const parseEnvBoolean = (value?: string) =>
+  value === "1" || value === "true" || value === "yes";
+
+const DEFAULT_STUN_URLS = [
+  "stun:stun.l.google.com:19302",
+  "stun:stun1.l.google.com:19302",
+  "stun:stun2.l.google.com:19302",
+  "stun:stun3.l.google.com:19302",
+  "stun:stun4.l.google.com:19302",
+  "stun:global.stun.twilio.com:3478"
+];
+
+const DEFAULT_TURN_URLS = [
+  "turn:openrelay.metered.ca:80",
+  "turn:openrelay.metered.ca:443",
+  "turn:openrelay.metered.ca:443?transport=tcp",
+  "turns:openrelay.metered.ca:443?transport=tcp"
+];
+
+const DEFAULT_TURN_USERNAME = "openrelayproject";
+const DEFAULT_TURN_CREDENTIAL = "openrelayproject";
+
+const envStunUrls = parseEnvList(import.meta.env.VITE_STUN_URLS);
+const envTurnUrls = parseEnvList(import.meta.env.VITE_TURN_URLS);
+const envTurnUsername = import.meta.env.VITE_TURN_USERNAME;
+const envTurnCredential = import.meta.env.VITE_TURN_CREDENTIAL;
+
+const buildIceServers = (): RTCIceServer[] => {
+  const servers: RTCIceServer[] = [];
+  const stunUrls = envStunUrls.length > 0 ? envStunUrls : DEFAULT_STUN_URLS;
+  const turnUrls = envTurnUrls.length > 0 ? envTurnUrls : DEFAULT_TURN_URLS;
+
+  stunUrls.forEach((url) => servers.push({ urls: url }));
+
+  if (turnUrls.length > 0) {
+    const hasEnvCreds = Boolean(envTurnUsername && envTurnCredential);
+    const isDefaultRelay = envTurnUrls.length === 0;
+
+    servers.push({
+      urls: turnUrls,
+      ...(hasEnvCreds
+        ? { username: envTurnUsername, credential: envTurnCredential }
+        : isDefaultRelay
+        ? { username: DEFAULT_TURN_USERNAME, credential: DEFAULT_TURN_CREDENTIAL }
+        : {})
+    });
+  }
+
+  return servers;
+};
+
 const ICE_SERVERS = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
-    { urls: 'stun:global.stun.twilio.com:3478' },
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    }
-  ],
+  iceServers: buildIceServers(),
   iceCandidatePoolSize: 10
+};
+
+const isLikelyMobile = () =>
+  /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+const isCellularConnection = () => {
+  const connection = (navigator as Navigator & {
+    connection?: { type?: string; effectiveType?: string };
+  }).connection;
+  if (!connection) return false;
+  if (connection.type) return connection.type === "cellular";
+  const effective = connection.effectiveType;
+  return (
+    isLikelyMobile() &&
+    (effective === "slow-2g" ||
+      effective === "2g" ||
+      effective === "3g" ||
+      effective === "4g" ||
+      effective === "5g")
+  );
+};
+
+const shouldForceRelayByDefault = () => {
+  const urlForceRelay = new URLSearchParams(window.location.search).has("forceRelay");
+  if (urlForceRelay) return true;
+  const envValue = import.meta.env.VITE_FORCE_RELAY_ON_MOBILE;
+  if (envValue && envValue.trim().length > 0) {
+    const forceOnMobile = parseEnvBoolean(envValue);
+    return forceOnMobile && (isLikelyMobile() || isCellularConnection());
+  }
+  // Mobile browsers often hide network-type info (notably iOS), so prefer relay by default.
+  return isLikelyMobile() || isCellularConnection();
 };
 
 const buildRtcConfig = (forceRelay: boolean): RTCConfiguration => ({
@@ -896,6 +963,13 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   }, []);
 
   const ensureLocalStream = useCallback(async (mode: 'voice' | 'video'): Promise<MediaStream> => {
+    const isLocalHost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (mode === "video" && !window.isSecureContext && !isLocalHost) {
+      throw new Error("VIDEO_SECURE_CONTEXT_REQUIRED");
+    }
+
     const existing = localStreamRef.current;
     if (existing) {
       const hasLiveAudio = existing.getAudioTracks().some(t => t.readyState === "live");
@@ -909,8 +983,43 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       return mediaRequestRef.current;
     }
 
-    const request = navigator.mediaDevices
-      .getUserMedia(getMediaConstraints(mode))
+    const requestUserMediaWithFallback = async () => {
+      const baseAudio = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      };
+
+      try {
+        return await navigator.mediaDevices.getUserMedia(getMediaConstraints(mode));
+      } catch (primaryErr) {
+        if (mode !== "video") {
+          throw primaryErr;
+        }
+        console.warn("[WEBRTC] primary video constraints failed, retrying with fallback constraints", primaryErr);
+      }
+
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: baseAudio,
+          video: {
+            facingMode: "user",
+            width: { ideal: 640 },
+            height: { ideal: 360 },
+            frameRate: { ideal: 15, max: 24 },
+          },
+        });
+      } catch (fallbackErr) {
+        console.warn("[WEBRTC] secondary video constraints failed, retrying with minimal constraints", fallbackErr);
+      }
+
+      return navigator.mediaDevices.getUserMedia({
+        audio: baseAudio,
+        video: true,
+      });
+    };
+
+    const request = requestUserMediaWithFallback()
       .then((stream) => {
         const qualityHint = currentVideoProfileRef.current === "hd" ? "detail" : "motion";
         stream.getVideoTracks().forEach((track) => {
@@ -1226,7 +1335,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       console.log(`[WEBRTC] attempting ICE recovery reason=${reason} attempt=${recoveryAttemptsRef.current}`);
 
       try {
-        if (recoveryAttemptsRef.current >= 2 && !forceRelayRef.current) {
+        if (recoveryAttemptsRef.current >= 1 && !forceRelayRef.current) {
           forceRelayRef.current = true;
           peer.setConfiguration(buildRtcConfig(true));
           console.log('[WEBRTC] forcing relay transport for recovery');
@@ -1357,6 +1466,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const initiateWebRTC = useCallback(async (mode: 'voice' | 'video') => {
     try {
       intentionalCallEndRef.current = false;
+      forceRelayRef.current = shouldForceRelayByDefault();
+      if (forceRelayRef.current) {
+        console.log("[WEBRTC] forcing relay by default for this call");
+      }
       const stream = await ensureLocalStream(mode);
       const peer = createPeerConnection(stream);
       if (peer.signalingState !== 'stable' || isMakingOfferRef.current) return;
@@ -1382,7 +1495,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       console.error('Media error:', err);
       toast({
         variant: 'destructive',
-        title: 'Could not access camera/microphone'
+        title:
+          err instanceof Error && err.message === "VIDEO_SECURE_CONTEXT_REQUIRED"
+            ? "Video calls on phone require HTTPS (secure site)"
+            : "Could not access camera/microphone"
       });
       cleanupCall(false, "media-access-failed");
     } finally {
@@ -1393,6 +1509,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const handleOffer = useCallback(async (sdp: RTCSessionDescriptionInit) => {
     try {
       intentionalCallEndRef.current = false;
+      forceRelayRef.current = shouldForceRelayByDefault();
+      if (forceRelayRef.current) {
+        console.log("[WEBRTC] forcing relay by default for this call");
+      }
       const mode = currentCallType.current || 'voice';
       const stream = await ensureLocalStream(mode);
       const peer = createPeerConnection(stream);
@@ -1431,7 +1551,13 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       }, 10000);
     } catch (e) {
       console.error('Error handling offer:', e);
-      toast({ variant: 'destructive', title: 'Failed to connect call' });
+      toast({
+        variant: 'destructive',
+        title:
+          e instanceof Error && e.message === "VIDEO_SECURE_CONTEXT_REQUIRED"
+            ? "Video calls on phone require HTTPS (secure site)"
+            : 'Failed to connect call',
+      });
       cleanupCall(false, "offer-handle-failed");
     }
   }, [ensureLocalStream, createPeerConnection, flushPendingCandidates, sendCallSignal, scheduleIceRecovery, toast, cleanupCall]);

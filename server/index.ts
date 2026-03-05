@@ -85,6 +85,10 @@ app.use((req, res, next) => {
   // your routes + websocket setup
   await registerRoutes(httpServer, app);
 
+  // npm run dev should use Vite middleware even if .env has NODE_ENV=production.
+  const isDevScript = process.env.npm_lifecycle_event === "dev";
+  const isProduction = process.env.NODE_ENV === "production" && !isDevScript;
+
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
@@ -96,7 +100,7 @@ app.use((req, res, next) => {
   // ------------------------------
   // PRODUCTION STATIC HANDLING
   // ------------------------------
-  if (process.env.NODE_ENV === "production") {
+  if (isProduction) {
     const staticDir = path.join(process.cwd(), "dist/public");
     app.use(express.static(staticDir));
 

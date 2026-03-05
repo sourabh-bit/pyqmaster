@@ -6,6 +6,8 @@ import type { Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import * as crypto from "crypto";
 import * as bcrypt from "bcrypt";
+import fs from "fs/promises";
+import path from "path";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import {
@@ -30,6 +32,11 @@ const MAX_HISTORY_PAGE_SIZE = 300;
 
 // Gatekeeper key from environment or fallback
 const GATEKEEPER_KEY = process.env.GATEKEEPER_KEY || "secret";
+const GATEKEEPER_STATE_PATH = path.join(
+  process.cwd(),
+  "data",
+  "gatekeeper-state.json"
+);
 
 const hasDatabase = !!process.env.DATABASE_URL;
 let db: any = null;
@@ -67,6 +74,41 @@ const verifyPassword = async (
     console.error("Password verification error:", error);
     return false;
   }
+};
+
+const normalizeCredential = (value: unknown): string => {
+  if (typeof value !== "string") return "";
+  return value.trim();
+};
+
+const loadGatekeeperState = async (): Promise<{
+  key: string;
+  changedAt: string | null;
+} | null> => {
+  try {
+    const raw = await fs.readFile(GATEKEEPER_STATE_PATH, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.key !== "string") return null;
+    return {
+      key: normalizeCredential(parsed.key) || GATEKEEPER_KEY,
+      changedAt:
+        typeof parsed.changedAt === "string" ? parsed.changedAt : null,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const saveGatekeeperState = async (
+  key: string,
+  changedAt: string | null
+): Promise<void> => {
+  await fs.mkdir(path.dirname(GATEKEEPER_STATE_PATH), { recursive: true });
+  await fs.writeFile(
+    GATEKEEPER_STATE_PATH,
+    JSON.stringify({ key, changedAt }, null, 2),
+    "utf-8"
+  );
 };
 
 // ---------- DB INIT ----------
@@ -361,22 +403,30 @@ export async function registerRoutes(
 
   let currentGatekeeperKey = GATEKEEPER_KEY;
   let gatekeeperChangedAt: string | null = null;
+  const gatekeeperState = await loadGatekeeperState();
+  if (gatekeeperState?.key) {
+    currentGatekeeperKey = gatekeeperState.key;
+    gatekeeperChangedAt = gatekeeperState.changedAt;
+  }
 
   app.post("/api/auth/gatekeeper/verify", (req, res) => {
     const { key } = req.body;
-    if (!key) {
+    const normalizedKey = normalizeCredential(key);
+    if (!normalizedKey) {
       return res
         .status(400)
         .json({ success: false, error: "Key is required" });
     }
-    const success = key === currentGatekeeperKey;
+    const success = normalizedKey === currentGatekeeperKey;
     res.json({ success });
   });
 
   app.post("/api/auth/gatekeeper/update", async (req, res) => {
     const { currentPassword, newKey } = req.body;
+    const normalizedCurrentPassword = normalizeCredential(currentPassword);
+    const normalizedNewKey = normalizeCredential(newKey);
 
-    if (!newKey || newKey.length < 4) {
+    if (!normalizedNewKey || normalizedNewKey.length < 4) {
       return res.status(400).json({
         success: false,
         error: "New key must be at least 4 characters",
@@ -389,9 +439,9 @@ export async function registerRoutes(
           where: eq(schema.users.id, adminUserId),
         });
 
-        if (adminUser && currentPassword) {
+        if (adminUser && normalizedCurrentPassword) {
           const isValid = await verifyPassword(
-            currentPassword,
+            normalizedCurrentPassword,
             adminUser.password
           );
           if (!isValid) {
@@ -402,8 +452,9 @@ export async function registerRoutes(
         }
       }
 
-      currentGatekeeperKey = newKey;
+      currentGatekeeperKey = normalizedNewKey;
       gatekeeperChangedAt = new Date().toISOString();
+      await saveGatekeeperState(currentGatekeeperKey, gatekeeperChangedAt);
       res.json({ success: true, changedAt: gatekeeperChangedAt });
     } catch (error) {
       console.error("Gatekeeper update error:", error);
@@ -445,8 +496,10 @@ export async function registerRoutes(
 
   app.post("/api/auth/admin/reset-password", async (req, res) => {
     const { adminPassword, targetUserType, newPassword } = req.body;
+    const normalizedAdminPassword = normalizeCredential(adminPassword);
+    const normalizedNewPassword = normalizeCredential(newPassword);
 
-    if (!targetUserType || !newPassword) {
+    if (!targetUserType || !normalizedNewPassword) {
       return res.status(400).json({
         success: false,
         error: "targetUserType and newPassword are required",
@@ -460,7 +513,7 @@ export async function registerRoutes(
       });
     }
 
-    if (newPassword.length < 4) {
+    if (normalizedNewPassword.length < 4) {
       return res.status(400).json({
         success: false,
         error: "New password must be at least 4 characters",
@@ -484,9 +537,9 @@ export async function registerRoutes(
           .json({ success: false, error: "Admin user not found" });
       }
 
-      if (adminPassword) {
+      if (normalizedAdminPassword) {
         const isValid = await verifyPassword(
-          adminPassword,
+          normalizedAdminPassword,
           adminUser.password
         );
         if (!isValid) {
@@ -496,7 +549,7 @@ export async function registerRoutes(
         }
       }
 
-      const newHash = await hashPassword(newPassword);
+      const newHash = await hashPassword(normalizedNewPassword);
       const now = new Date();
 
       await db
@@ -521,8 +574,9 @@ export async function registerRoutes(
 
   app.post("/api/auth/verify", async (req, res) => {
     const { userType, password } = req.body;
+    const normalizedPassword = normalizeCredential(password);
 
-    if (!password) {
+    if (!normalizedPassword) {
       return res
         .status(400)
         .json({ success: false, error: "password is required" });
@@ -536,17 +590,17 @@ export async function registerRoutes(
         };
 
         if (userType) {
-          const success = password === defaults[userType];
+          const success = normalizedPassword === defaults[userType];
           return res.json({
             success,
             userType: success ? userType : null,
           });
         }
 
-        if (password === defaults.admin) {
+        if (normalizedPassword === defaults.admin) {
           return res.json({ success: true, userType: "admin" });
         }
-        if (password === defaults.friend) {
+        if (normalizedPassword === defaults.friend) {
           return res.json({ success: true, userType: "friend" });
         }
         return res.json({ success: false, userType: null });
@@ -568,7 +622,10 @@ export async function registerRoutes(
           return res.json({ success: false, userType: null });
         }
 
-        const isValid = await verifyPassword(password, user.password);
+        const isValid = await verifyPassword(
+          normalizedPassword,
+          user.password
+        );
 
         // Lazy cleanup on user login
         if (isValid) {
@@ -588,7 +645,10 @@ export async function registerRoutes(
       const adminUser = await db.query.users.findFirst({
         where: eq(schema.users.id, adminUserId),
       });
-      if (adminUser && (await verifyPassword(password, adminUser.password))) {
+      if (
+        adminUser &&
+        (await verifyPassword(normalizedPassword, adminUser.password))
+      ) {
         return res.json({ success: true, userType: "admin" });
       }
 
@@ -597,7 +657,7 @@ export async function registerRoutes(
       });
       if (
         friendUser &&
-        (await verifyPassword(password, friendUser.password))
+        (await verifyPassword(normalizedPassword, friendUser.password))
       ) {
         return res.json({ success: true, userType: "friend" });
       }
@@ -613,8 +673,10 @@ export async function registerRoutes(
 
   app.post("/api/auth/password", async (req, res) => {
     const { userType, currentPassword, newPassword } = req.body;
+    const normalizedCurrentPassword = normalizeCredential(currentPassword);
+    const normalizedNewPassword = normalizeCredential(newPassword);
 
-    if (!userType || !currentPassword || !newPassword) {
+    if (!userType || !normalizedCurrentPassword || !normalizedNewPassword) {
       return res.status(400).json({
         success: false,
         error: "userType, currentPassword, and newPassword are required",
@@ -627,7 +689,7 @@ export async function registerRoutes(
         .json({ success: false, error: "Invalid userType" });
     }
 
-    if (newPassword.length < 4) {
+    if (normalizedNewPassword.length < 4) {
       return res.status(400).json({
         success: false,
         error: "New password must be at least 4 characters",
@@ -654,7 +716,7 @@ export async function registerRoutes(
       }
 
       const isValid = await verifyPassword(
-        currentPassword,
+        normalizedCurrentPassword,
         user.password
       );
       if (!isValid) {
@@ -663,7 +725,7 @@ export async function registerRoutes(
           .json({ success: false, error: "Current password is incorrect" });
       }
 
-      const newHash = await hashPassword(newPassword);
+      const newHash = await hashPassword(normalizedNewPassword);
       const now = new Date();
       await db
         .update(schema.users)
@@ -2035,17 +2097,16 @@ export async function registerRoutes(
 
   // -------- INIT DB + INDEXES --------
 
-  initializeDatabase().then(async () => {
-    console.log(
-      "[DB] hasDatabase=",
-      hasDatabase,
-      "adminUserId=",
-      adminUserId,
-      "friendUserId=",
-      friendUserId
-    );
-    await ensureIndexes();
-  });
+  await initializeDatabase();
+  console.log(
+    "[DB] hasDatabase=",
+    hasDatabase,
+    "adminUserId=",
+    adminUserId,
+    "friendUserId=",
+    friendUserId
+  );
+  await ensureIndexes();
 
   return httpServer;
 }

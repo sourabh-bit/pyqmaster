@@ -17,6 +17,25 @@ export function LoginOverlay({ isOpen, onSuccess, onClose }: LoginOverlayProps) 
   const [step, setStep] = useState<'gatekeeper' | 'personal'>('gatekeeper');
   const [loading, setLoading] = useState(false);
 
+  const postJsonWithTimeout = async (url: string, payload: unknown, timeoutMs = 10000) => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      const data = await res.json().catch(() => ({}));
+      return { res, data };
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  };
+
   useEffect(() => {
     if (!isOpen) {
       setPassword("");
@@ -37,34 +56,65 @@ export function LoginOverlay({ isOpen, onSuccess, onClose }: LoginOverlayProps) 
 
     try {
       if (step === 'gatekeeper') {
-        const res = await fetch('/api/auth/gatekeeper/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key: secretKey }),
-        });
-        const data = await res.json();
+        const keyToVerify = secretKey.trim();
+        if (!keyToVerify) {
+          setErrorMessage("Secret key is required.");
+          setError(true);
+          return;
+        }
+
+        const { res, data } = await postJsonWithTimeout(
+          "/api/auth/gatekeeper/verify",
+          { key: keyToVerify }
+        );
+
+        if (!res.ok) {
+          setErrorMessage(data.error || "Unable to verify secret key.");
+          setError(true);
+          return;
+        }
         
         if (data.success) {
           setStep('personal');
+          setPassword("");
         } else {
+          setErrorMessage(data.error || "Invalid secret key.");
           shakeError();
         }
       } else {
-        const res = await fetch('/api/auth/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password }),
-        });
-        const data = await res.json();
+        const passwordToVerify = password.trim();
+        if (!passwordToVerify) {
+          setErrorMessage("Password is required.");
+          setError(true);
+          return;
+        }
+
+        const { res, data } = await postJsonWithTimeout(
+          "/api/auth/verify",
+          { password: passwordToVerify }
+        );
+
+        if (!res.ok) {
+          setErrorMessage(data.error || "Unable to verify password.");
+          setError(true);
+          return;
+        }
         
         if (data.success) {
           onSuccess(data.userType);
         } else {
+          setErrorMessage(data.error || "Invalid password.");
           shakeError();
         }
       }
-    } catch {
-      setErrorMessage("Network error. Please try again.");
+    } catch (err) {
+      const isAbort =
+        err instanceof DOMException && err.name === "AbortError";
+      setErrorMessage(
+        isAbort
+          ? "Request timed out. Please try again."
+          : "Network error. Please try again."
+      );
       setError(true);
     } finally {
       setLoading(false);

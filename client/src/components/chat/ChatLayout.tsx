@@ -64,6 +64,7 @@ const LazySettingsPanel = lazy(() =>
 );
 
 const FIXED_ROOM_ID = "secure-room-001";
+const ENABLE_HEADER_DOUBLE_TAP_LOCK = false;
 
 interface ChatLayoutProps {
   onLock: () => void;
@@ -728,8 +729,8 @@ export function ChatLayout({
           const maxAttempts = retryBackoffMs.length + 1;
           const shouldAvoidCompression =
             Boolean(options?.preferLowMemory) ||
-            isLowMemoryMode ||
-            options?.source === "camera";
+            isLowMemoryMode;
+          const forceCompressionForCamera = options?.source === "camera";
           const compressionThresholdBytes =
             options?.source === "gallery" ? Math.round(1.8 * 1024 * 1024) : 1024 * 1024;
 
@@ -747,19 +748,30 @@ export function ChatLayout({
           await waitForVisible();
 
           let fileToUpload: File | Blob = file;
-          if (file.type.startsWith("image/") && file.size > compressionThresholdBytes && !shouldAvoidCompression) {
-            emitUploadProgress({
-              fileName: file.name,
-              stage: "compressing",
-              progress: 18,
-            });
-            fileToUpload = await compressImage(file, uploadQuality);
-            console.log(`[UPLOAD] after-compression size=${toMb(fileToUpload.size)}MB`);
-            emitUploadProgress({
-              fileName: file.name,
-              stage: "compressing",
-              progress: 42,
-            });
+          const shouldTryCompression =
+            file.type.startsWith("image/") &&
+            (forceCompressionForCamera ||
+              (file.size > compressionThresholdBytes && !shouldAvoidCompression));
+
+          if (shouldTryCompression) {
+            try {
+              emitUploadProgress({
+                fileName: file.name,
+                stage: "compressing",
+                progress: 18,
+              });
+              fileToUpload = await compressImage(file, uploadQuality);
+              console.log(`[UPLOAD] after-compression size=${toMb(fileToUpload.size)}MB`);
+              emitUploadProgress({
+                fileName: file.name,
+                stage: "compressing",
+                progress: 42,
+              });
+            } catch (compressionError) {
+              // Some mobile camera formats may fail browser-side decoding; fallback to original file upload.
+              console.warn("[UPLOAD] image compression failed, falling back to original file", compressionError);
+              fileToUpload = file;
+            }
           } else if (file.type.startsWith("image/") && shouldAvoidCompression) {
             console.log("[UPLOAD] skipped client compression due to low-memory preference");
           } else if (file.type.startsWith("video/")) {
@@ -920,14 +932,27 @@ export function ChatLayout({
         const file = (e.target as HTMLInputElement).files?.[0];
         if (!file) return;
         toast({ title: "Uploading image..." });
-        const url = await uploadToCloudinary(file, { source: "camera", preferLowMemory: true });
+        const url = await uploadToCloudinary(file, { source: "camera" });
         if (url) {
           sendMessage({ type: "image", mediaUrl: url, text: "" });
           // Scroll to bottom after sending camera image
           requestAnimationFrame(() => {
             scrollToBottom();
           });
+        } else {
+          toast({
+            variant: "destructive",
+            title: "Upload failed",
+            description: "Please try capturing again.",
+          });
         }
+      } catch (err) {
+        console.error("[UPLOAD] camera flow failed", err);
+        toast({
+          variant: "destructive",
+          title: "Camera upload failed",
+          description: "You are still logged in. Please try again.",
+        });
       } finally {
         cleanup();
       }
@@ -993,6 +1018,13 @@ export function ChatLayout({
         // Scroll to bottom after sending gallery media
         requestAnimationFrame(() => {
           scrollToBottom();
+        });
+      } catch (err) {
+        console.error("[UPLOAD] gallery flow failed", err);
+        toast({
+          variant: "destructive",
+          title: "Media upload failed",
+          description: "You are still logged in. Please try again.",
         });
       } finally {
         cleanup();
@@ -1060,9 +1092,10 @@ export function ChatLayout({
     return "Offline";
   }, [isPeerOnline, (peerProfile as any).lastSeen]);
 
-  // double tap header -> lock
+  // Optional double-tap header -> lock
   const [tapCount, setTapCount] = useState(0);
   const handleHeaderDoubleTap = useCallback(() => {
+    if (!ENABLE_HEADER_DOUBLE_TAP_LOCK) return;
     setTapCount((prev) => prev + 1);
     setTimeout(() => setTapCount(0), 300);
     if (tapCount === 1) {
@@ -1548,7 +1581,7 @@ const messagesList = useMemo(
               "h-14 sm:h-16 flex items-center justify-between px-2 sm:px-4 border-b border-black/40 z-50 shrink-0 safe-area-top selection-header md:relative fixed top-0 left-0 right-0 md:top-auto md:left-auto md:right-auto",
               isSelectMode ? "bg-emerald-900/90" : "bg-[#202c33]"
             )}
-            onClick={!isSelectMode ? handleHeaderDoubleTap : undefined}
+            onClick={!isSelectMode && ENABLE_HEADER_DOUBLE_TAP_LOCK ? handleHeaderDoubleTap : undefined}
           >
             {isSelectMode ? (
               <>

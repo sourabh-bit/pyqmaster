@@ -4,8 +4,15 @@ const STATIC_CACHE = `pyqmaster-static-${SW_VERSION}`;
 const RUNTIME_CACHE = `pyqmaster-runtime-${SW_VERSION}`;
 const CACHE_PREFIX = "pyqmaster-";
 const PRECACHE_URLS = ["/", "/index.html", "/manifest.json", "/favicon.png"];
+const IS_LOCALHOST =
+  self.location.hostname === "localhost" ||
+  self.location.hostname === "127.0.0.1";
 
 self.addEventListener("install", (event) => {
+  if (IS_LOCALHOST) {
+    self.skipWaiting();
+    return;
+  }
   event.waitUntil(
     (async () => {
       self.skipWaiting();
@@ -32,6 +39,10 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
+  if (IS_LOCALHOST) {
+    event.respondWith(fetch(req));
+    return;
+  }
   if (req.headers.has("range") || req.cache === "no-store") {
     event.respondWith(fetch(req));
     return;
