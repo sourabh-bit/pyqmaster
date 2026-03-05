@@ -1504,8 +1504,14 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         console.log("[WEBRTC] forcing relay by default for this call");
       }
       const stream = await ensureLocalStream(mode);
-      const peer = createPeerConnection(stream);
-      if (peer.signalingState !== 'stable' || isMakingOfferRef.current) return;
+      let peer = createPeerConnection(stream);
+      if (peer.signalingState !== 'stable') {
+        console.log(
+          `[WEBRTC] recreating peer before offer because signalingState=${peer.signalingState}`
+        );
+        peer = createPeerConnection(stream, true);
+      }
+      if (isMakingOfferRef.current) return;
 
       isMakingOfferRef.current = true;
       const offer = await peer.createOffer({
@@ -1548,7 +1554,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       }
       const mode = currentCallType.current || 'voice';
       const stream = await ensureLocalStream(mode);
-      const peer = createPeerConnection(stream);
+      let peer = createPeerConnection(stream);
       const incomingSdp = sdp.sdp || "";
       if (incomingSdp && incomingSdp === lastRemoteOfferSdpRef.current && peer.signalingState === 'stable') {
         console.log('[WEBRTC] Ignoring duplicate remote offer');
@@ -1556,14 +1562,11 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       }
       lastRemoteOfferSdpRef.current = incomingSdp;
 
-      const offerCollision = isMakingOfferRef.current || peer.signalingState !== 'stable';
-      if (offerCollision && !isPolitePeerRef.current) {
-        console.log('[WEBRTC] Ignoring offer collision (impolite peer)');
-        return;
-      }
-
-      if (offerCollision) {
-        await peer.setLocalDescription({ type: 'rollback' } as RTCSessionDescriptionInit);
+      if (peer.signalingState !== 'stable') {
+        console.log(
+          `[WEBRTC] recreating peer before applying offer because signalingState=${peer.signalingState}`
+        );
+        peer = createPeerConnection(stream, true);
       }
 
       await peer.setRemoteDescription(new RTCSessionDescription(sdp));
@@ -1591,6 +1594,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
             ? "Video calls on phone require HTTPS (secure site)"
             : 'Failed to connect call',
       });
+      sendCallSignal({ type: "call-end", reason: "offer-handle-failed" }, true);
       cleanupCall(false, "offer-handle-failed");
     }
   }, [ensureLocalStream, createPeerConnection, flushPendingCandidates, sendCallSignal, scheduleIceRecovery, toast, cleanupCall]);
