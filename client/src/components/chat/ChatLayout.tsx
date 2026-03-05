@@ -619,20 +619,11 @@ export function ChatLayout({
         if (file.size > 8 * 1024 * 1024) {
           jpegQuality = Math.max(minQuality, jpegQuality - 0.08);
         }
-        let source: CanvasImageSource;
+        let source: CanvasImageSource | null = null;
         let sourceWidth = 0;
         let sourceHeight = 0;
         let cleanupSource = () => undefined;
-
-        if (typeof window.createImageBitmap === "function") {
-          const bitmap = await window.createImageBitmap(file);
-          source = bitmap;
-          sourceWidth = bitmap.width;
-          sourceHeight = bitmap.height;
-          cleanupSource = () => {
-            bitmap.close();
-          };
-        } else {
+        const loadImageElement = async () => {
           const image = await new Promise<HTMLImageElement>((resolve, reject) => {
             const element = new window.Image();
             const objectUrl = URL.createObjectURL(file);
@@ -652,6 +643,27 @@ export function ChatLayout({
           cleanupSource = () => {
             image.src = "";
           };
+        };
+
+        if (typeof window.createImageBitmap === "function") {
+          try {
+            const bitmap = await window.createImageBitmap(file);
+            source = bitmap;
+            sourceWidth = bitmap.width;
+            sourceHeight = bitmap.height;
+            cleanupSource = () => {
+              bitmap.close();
+            };
+          } catch (bitmapErr) {
+            console.warn("[UPLOAD] createImageBitmap failed, trying HTMLImageElement decode", bitmapErr);
+            await loadImageElement();
+          }
+        } else {
+          await loadImageElement();
+        }
+
+        if (!source || sourceWidth <= 0 || sourceHeight <= 0) {
+          throw new Error("Image decode failed before compression");
         }
 
         const canvas = document.createElement("canvas");
@@ -782,7 +794,13 @@ export function ChatLayout({
             await wait(0);
           }
 
-          const resourceType = file.type.startsWith("video/") ? "video" : "image";
+          const isHeicLike =
+            /image\/hei(c|f)/i.test(file.type) || /\.(heic|heif)$/i.test(file.name);
+          const resourceType = file.type.startsWith("video/")
+            ? "video"
+            : isHeicLike
+            ? "auto"
+            : "image";
           const uploadUrl = `https://api.cloudinary.com/v1_1/dqdx30pbj/${resourceType}/upload`;
           let lastError: unknown = null;
 
@@ -790,7 +808,13 @@ export function ChatLayout({
             await waitForOnline(file.name);
             await waitForVisible();
             const formData = new FormData();
-            formData.append("file", fileToUpload, file.name);
+            const uploadFileName =
+              fileToUpload instanceof File
+                ? fileToUpload.name
+                : `${(file.name || "camera")
+                    .replace(/\.[^/.]+$/, "")
+                    .replace(/[^a-zA-Z0-9_-]/g, "_")}.jpg`;
+            formData.append("file", fileToUpload, uploadFileName);
             formData.append("upload_preset", presetName);
 
             try {
