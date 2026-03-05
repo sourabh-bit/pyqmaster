@@ -6,6 +6,9 @@ import { ChatLayout } from "@/components/chat/ChatLayout";
 import { AdminPanel } from "@/components/admin/AdminPanel";
 import { Toaster } from "@/components/ui/toaster";
 
+const AUTH_SESSION_KEY = "chat_unlocked_session_tab_v1";
+const AUTH_SESSION_TTL_MS = 1000 * 60 * 30;
+
 export default function Home() {
   const AUTO_LOCK_TIMEOUT_MS = 0; // set > 0 to enable inactivity lock
   const [mode, setMode] = useState<'disguise' | 'chat'>('disguise');
@@ -18,6 +21,30 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search);
     if (params.get('mode') === 'calc') {
       setDisguiseType('calc');
+    }
+
+    // Recover chat only for accidental reload within the same browser tab/session.
+    try {
+      const raw = sessionStorage.getItem(AUTH_SESSION_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        userType?: "admin" | "friend";
+        at?: number;
+      };
+      const ageMs = Date.now() - (parsed?.at ?? 0);
+      if (
+        (parsed?.userType === "admin" || parsed?.userType === "friend") &&
+        parsed?.at &&
+        ageMs <= AUTH_SESSION_TTL_MS
+      ) {
+        setCurrentUser(parsed.userType);
+        setMode("chat");
+        setShowLogin(false);
+      } else {
+        sessionStorage.removeItem(AUTH_SESSION_KEY);
+      }
+    } catch {
+      sessionStorage.removeItem(AUTH_SESSION_KEY);
     }
   }, []);
 
@@ -68,6 +95,10 @@ export default function Home() {
     setMode("chat");
     setShowAdminPanel(false);
     setShowLogin(false);
+    sessionStorage.setItem(
+      AUTH_SESSION_KEY,
+      JSON.stringify({ userType, at: Date.now() })
+    );
   };
 
   const handlePanicLock = () => {
@@ -75,6 +106,7 @@ export default function Home() {
     setShowLogin(false);
     setShowAdminPanel(false);
     setCurrentUser("friend");
+    sessionStorage.removeItem(AUTH_SESSION_KEY);
   };
 
   // Admin shortcut
