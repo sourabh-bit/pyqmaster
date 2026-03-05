@@ -504,6 +504,8 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const iceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const callStatsIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectCallTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const remoteMediaWatchdogRef = useRef<NodeJS.Timeout | null>(null);
+  const noRemoteMediaAttemptsRef = useRef(0);
   const currentVideoProfileRef = useRef<VideoProfile>("hd");
   const lastStatsRef = useRef<CallStatsSnapshot | null>(null);
   const lastCandidatePairIdRef = useRef<string>("");
@@ -846,6 +848,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       clearTimeout(backgroundVideoSuspendTimeoutRef.current);
       backgroundVideoSuspendTimeoutRef.current = null;
     }
+    if (remoteMediaWatchdogRef.current) {
+      clearTimeout(remoteMediaWatchdogRef.current);
+      remoteMediaWatchdogRef.current = null;
+    }
   }, []);
 
   const cleanupCall = useCallback((preserveSession = false, endReason = "unknown") => {
@@ -886,6 +892,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     qualityDowngradeStreakRef.current = 0;
     qualityUpgradeStreakRef.current = 0;
     statsTickRef.current = 0;
+    noRemoteMediaAttemptsRef.current = 0;
     callStartedAtRef.current = null;
     relayUsageCountRef.current = 0;
     relayTotalDurationMsRef.current = 0;
@@ -1381,6 +1388,46 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     scheduleIceRecoveryRef.current = scheduleIceRecovery;
   }, [scheduleIceRecovery]);
 
+  const startRemoteMediaWatchdog = useCallback(() => {
+    if (remoteMediaWatchdogRef.current) {
+      clearTimeout(remoteMediaWatchdogRef.current);
+      remoteMediaWatchdogRef.current = null;
+    }
+
+    remoteMediaWatchdogRef.current = setTimeout(() => {
+      const peer = peerRef.current;
+      if (!peer || intentionalCallEndRef.current || callStatus === "idle") return;
+
+      const remote = remoteStreamRef.current;
+      const hasRemoteAudio = Boolean(
+        remote?.getAudioTracks().some((track) => track.readyState === "live")
+      );
+      const hasRemoteVideo = Boolean(
+        remote?.getVideoTracks().some((track) => track.readyState === "live")
+      );
+
+      if (hasRemoteAudio || hasRemoteVideo) {
+        noRemoteMediaAttemptsRef.current = 0;
+        return;
+      }
+
+      noRemoteMediaAttemptsRef.current += 1;
+      const attempt = noRemoteMediaAttemptsRef.current;
+      emitCallTelemetry("no_remote_media", {
+        attempt,
+        connectionState: peer.connectionState,
+        iceConnectionState: peer.iceConnectionState,
+      });
+      scheduleIceRecovery(`no-remote-media-${attempt}`);
+
+      if (attempt < 3) {
+        remoteMediaWatchdogRef.current = setTimeout(() => {
+          startRemoteMediaWatchdog();
+        }, 8000);
+      }
+    }, 12000);
+  }, [callStatus, emitCallTelemetry, scheduleIceRecovery]);
+
   const createPeerConnection = useCallback((stream: MediaStream, recreate = false) => {
     if (peerRef.current && !recreate) {
       return peerRef.current;
@@ -1458,6 +1505,11 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         attachTrack(event.track);
       }
 
+      noRemoteMediaAttemptsRef.current = 0;
+      if (remoteMediaWatchdogRef.current) {
+        clearTimeout(remoteMediaWatchdogRef.current);
+        remoteMediaWatchdogRef.current = null;
+      }
       setRemoteStream(new MediaStream(mergedRemote.getTracks()));
     };
 
@@ -1520,6 +1572,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       });
       await peer.setLocalDescription(offer);
       sendCallSignal({ type: 'offer', sdp: offer }, true);
+      startRemoteMediaWatchdog();
 
       if (iceTimeoutRef.current) clearTimeout(iceTimeoutRef.current);
       iceTimeoutRef.current = setTimeout(() => {
@@ -1543,7 +1596,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     } finally {
       isMakingOfferRef.current = false;
     }
-  }, [ensureLocalStream, createPeerConnection, sendCallSignal, scheduleIceRecovery, toast, cleanupCall]);
+  }, [ensureLocalStream, createPeerConnection, sendCallSignal, scheduleIceRecovery, startRemoteMediaWatchdog, toast, cleanupCall]);
 
   const handleOffer = useCallback(async (sdp: RTCSessionDescriptionInit) => {
     try {
@@ -1575,6 +1628,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
       sendCallSignal({ type: 'answer', sdp: answer }, true);
+      startRemoteMediaWatchdog();
 
       if (iceTimeoutRef.current) clearTimeout(iceTimeoutRef.current);
       iceTimeoutRef.current = setTimeout(() => {
@@ -1597,7 +1651,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       sendCallSignal({ type: "call-end", reason: "offer-handle-failed" }, true);
       cleanupCall(false, "offer-handle-failed");
     }
-  }, [ensureLocalStream, createPeerConnection, flushPendingCandidates, sendCallSignal, scheduleIceRecovery, toast, cleanupCall]);
+  }, [ensureLocalStream, createPeerConnection, flushPendingCandidates, sendCallSignal, scheduleIceRecovery, startRemoteMediaWatchdog, toast, cleanupCall]);
 
   const handleAnswer = useCallback(async (sdp: RTCSessionDescriptionInit) => {
     if (!peerRef.current) return;
@@ -1606,10 +1660,11 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         new RTCSessionDescription(sdp)
       );
       await flushPendingCandidates(peerRef.current);
+      startRemoteMediaWatchdog();
     } catch (e) {
       console.error('Error handling answer:', e);
     }
-  }, [flushPendingCandidates]);
+  }, [flushPendingCandidates, startRemoteMediaWatchdog]);
 
   const handleIceCandidate = useCallback(async (candidate: RTCIceCandidateInit) => {
     if (!candidate) return;

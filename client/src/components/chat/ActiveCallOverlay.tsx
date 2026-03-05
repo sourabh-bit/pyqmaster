@@ -172,7 +172,8 @@ export function ActiveCallOverlay({
   useEffect(() => {
     if (remoteStream) {
       if (remoteVideoRef.current) {
-        bindVideoStream(remoteVideoRef.current, remoteStream, false);
+        // Keep remote video muted to satisfy autoplay policies; play remote audio via hidden audio element.
+        bindVideoStream(remoteVideoRef.current, remoteStream, true);
       }
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
@@ -185,9 +186,15 @@ export function ActiveCallOverlay({
       const resumeAudio = () => {
         remoteAudioRef.current?.play().catch(() => {});
       };
+      const onUserGesture = () => {
+        remoteAudioRef.current?.play().catch(() => {});
+      };
       audioTracks.forEach((track) => {
         track.onunmute = resumeAudio;
       });
+      window.addEventListener("touchstart", onUserGesture, { passive: true });
+      window.addEventListener("click", onUserGesture);
+      window.addEventListener("keydown", onUserGesture);
 
       const videoEl = remoteVideoRef.current;
       const captureOnChange = () => captureRemoteFrame();
@@ -204,6 +211,9 @@ export function ActiveCallOverlay({
         audioTracks.forEach((track) => {
           track.onunmute = null;
         });
+        window.removeEventListener("touchstart", onUserGesture);
+        window.removeEventListener("click", onUserGesture);
+        window.removeEventListener("keydown", onUserGesture);
       };
     }
     setLastRemoteFrame((prev) => {
@@ -324,6 +334,7 @@ export function ActiveCallOverlay({
           <video
             ref={remoteVideoRef}
             autoPlay
+            muted
             playsInline
             className={cn(
               "w-full h-full bg-black",
