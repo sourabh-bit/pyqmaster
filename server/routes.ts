@@ -46,6 +46,8 @@ let friendUserId: string;
 
 // Lazy cleanup time guard
 let lastCleanupTime = 0;
+const WS_HEARTBEAT_INTERVAL_MS = 10_000;
+const WS_STALE_TIMEOUT_MS = 25_000;
 
 // VAPID keys for push notifications
 const vapidPublicKey = process.env.VAPID_PUBLIC_KEY;
@@ -1191,8 +1193,39 @@ export async function registerRoutes(
     let lastSyncTimestamp = 0;
     let heartbeatInterval: NodeJS.Timeout | null = null;
     let lastHeartbeat = Date.now();
+    let isAlive = true;
+
+    ws.on("pong", () => {
+      isAlive = true;
+      lastHeartbeat = Date.now();
+    });
+
+    heartbeatInterval = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      const now = Date.now();
+      if (!isAlive || now - lastHeartbeat > WS_STALE_TIMEOUT_MS) {
+        try {
+          ws.terminate();
+        } catch {
+          // ignore termination errors
+        }
+        return;
+      }
+      isAlive = false;
+      try {
+        ws.ping();
+      } catch {
+        try {
+          ws.terminate();
+        } catch {
+          // ignore termination errors
+        }
+      }
+    }, WS_HEARTBEAT_INTERVAL_MS);
 
     ws.on("message", async (message) => {
+      lastHeartbeat = Date.now();
+      isAlive = true;
       try {
         const data = JSON.parse(message.toString());
         const { type } = data;
@@ -1695,7 +1728,6 @@ export async function registerRoutes(
 
                 if (adminSubscriptions.length === 0) {
                   console.log('No push subscriptions found for admin');
-                  return;
                 }
 
                 const msgPreview = sanitizedText.length > 50
@@ -1734,7 +1766,9 @@ export async function registerRoutes(
                     };
 
                     await wp.sendNotification(subscription, pushPayload, {
-                      TTL: 86400
+                      TTL: 3600,
+                      urgency: "high",
+                      topic: "chat-message"
                     });
 
                     console.log('Push notification sent successfully to admin');
@@ -1996,6 +2030,10 @@ export async function registerRoutes(
     });
 
     ws.on("close", () => {
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
       if (currentRoom && rooms.has(currentRoom) && myUserId) {
         const room = rooms.get(currentRoom)!;
         room.clients.delete(ws);
@@ -2028,6 +2066,10 @@ export async function registerRoutes(
     });
 
     ws.on("error", (error) => {
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
       console.error("WebSocket error:", error);
     });
   });

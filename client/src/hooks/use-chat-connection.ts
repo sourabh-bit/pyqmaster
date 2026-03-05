@@ -230,7 +230,7 @@ const registerServiceWorker = async () => {
   if ('serviceWorker' in navigator) {
     try {
       swRegistration =
-        (await navigator.serviceWorker.getRegistration("/sw.js")) ||
+        (await navigator.serviceWorker.getRegistration()) ||
         (await navigator.serviceWorker.register('/sw.js'));
       return swRegistration;
     } catch (err) {
@@ -243,25 +243,7 @@ const registerServiceWorker = async () => {
 
 const subscribeToPush = async (registration: ServiceWorkerRegistration, userType: 'admin' | 'friend') => {
   try {
-    // Check if already subscribed
     let subscription = await registration.pushManager.getSubscription();
-
-    if (subscription) {
-      console.log('Already subscribed to push notifications');
-      return;
-    }
-
-    const response = await fetch('/api/push/vapid-key');
-    if (!response.ok) {
-      console.log('Push notifications not configured on server');
-      return;
-    }
-
-    const { publicKey } = await response.json();
-    if (!publicKey) {
-      console.log('No VAPID public key available');
-      return;
-    }
 
     const urlBase64ToUint8Array = (base64String: string) => {
       const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -276,10 +258,51 @@ const subscribeToPush = async (registration: ServiceWorkerRegistration, userType
       return outputArray;
     };
 
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey)
-    });
+    const createSubscription = async () => {
+      const response = await fetch('/api/push/vapid-key');
+      if (!response.ok) {
+        console.log('Push notifications not configured on server');
+        return null;
+      }
+
+      const { publicKey } = await response.json();
+      if (!publicKey) {
+        console.log('No VAPID public key available');
+        return null;
+      }
+
+      return registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey)
+      });
+    };
+
+    if (!subscription) {
+      subscription = await createSubscription();
+      if (!subscription) return;
+      console.log('Created browser push subscription');
+    }
+
+    let p256dhKey = subscription.getKey('p256dh');
+    let authKey = subscription.getKey('auth');
+
+    // Some stale subscriptions can lose keys after browser updates.
+    if (!p256dhKey || !authKey) {
+      try {
+        await subscription.unsubscribe();
+      } catch (_err) {
+        // ignore
+      }
+      subscription = await createSubscription();
+      if (!subscription) return;
+      p256dhKey = subscription.getKey('p256dh');
+      authKey = subscription.getKey('auth');
+    }
+
+    if (!p256dhKey || !authKey) {
+      console.error('Push subscription keys unavailable');
+      return;
+    }
 
     const subscribeResponse = await fetch('/api/push/subscribe', {
       method: 'POST',
@@ -288,8 +311,8 @@ const subscribeToPush = async (registration: ServiceWorkerRegistration, userType
         subscription: {
           endpoint: subscription.endpoint,
           keys: {
-            p256dh: arrayBufferToBase64(subscription.getKey('p256dh')!),
-            auth: arrayBufferToBase64(subscription.getKey('auth')!)
+            p256dh: arrayBufferToBase64(p256dhKey),
+            auth: arrayBufferToBase64(authKey)
           }
         },
         userType: userType
@@ -297,9 +320,9 @@ const subscribeToPush = async (registration: ServiceWorkerRegistration, userType
     });
 
     if (subscribeResponse.ok) {
-      console.log('Successfully subscribed to push notifications');
+      console.log('Push subscription synced with server');
     } else {
-      console.error('Failed to subscribe on server');
+      console.error('Failed to sync push subscription on server');
     }
   } catch (err) {
     console.error('Push subscription failed:', err);
