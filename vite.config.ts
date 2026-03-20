@@ -4,28 +4,15 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import { metaImagesPlugin } from "./vite-plugin-meta-images";
 
-const isReplit = process.env.REPL_ID !== undefined;
 const rootDir = process.cwd();
-
-// 👇 declare variables
-let runtimeErrorModal: any;
-let cartographer: any;
-let devBanner: any;
-
-// 👇 only load in Replit
-if (isReplit) {
-  runtimeErrorModal = require("@replit/vite-plugin-runtime-error-modal").default;
-  cartographer = require("@replit/vite-plugin-cartographer").cartographer;
-  devBanner = require("@replit/vite-plugin-dev-banner").devBanner;
-}
 
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
     metaImagesPlugin(),
-    ...(isReplit ? [runtimeErrorModal(), cartographer(), devBanner()] : []),
   ],
+
   resolve: {
     alias: {
       "@": path.resolve(rootDir, "client", "src"),
@@ -33,10 +20,39 @@ export default defineConfig({
       "@assets": path.resolve(rootDir, "attached_assets"),
     },
   },
+
+  // ❌ REMOVED broken css.postcss block
+
   root: path.resolve(rootDir, "client"),
+
   build: {
     outDir: "../dist/public",
     emptyOutDir: true,
     assetsDir: "assets",
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "react-vendor": ["react", "react-dom"],
+          "ui-vendor": ["lucide-react"],
+        },
+      },
+    },
+    minify: "esbuild",
+    target: "es2020",
+    chunkSizeWarningLimit: 1200,
+  },
+
+  server: {
+    host: "0.0.0.0",
+    allowedHosts: true,
+    headers: {
+      "Cache-Control": "no-store",
+      Pragma: "no-cache",
+      Expires: "0",
+    },
+    fs: {
+      strict: true,
+      deny: ["**/.*"],
+    },
   },
 });
