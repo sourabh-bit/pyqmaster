@@ -1,28 +1,28 @@
 {
-  "name": "JEE Physics PYQ",
-  "short_name": "JEE PYQ",
-  "description": "JEE Advanced Physics Previous Year Questions",
+  "name": "BoardReady XII",
+  "short_name": "Study XII",
+  "description": "Class 12 Mathematics, Physics and Chemistry practice questions",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#f4efe6",
+  "theme_color": "#334a7b",
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/favicon.png",
+      "src": "/study-app-icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/favicon.png",
+      "src": "/study-app-icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "maskable"
     },
     {
-      "src": "/favicon.png",
+      "src": "/study-app-icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"

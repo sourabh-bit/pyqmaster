@@ -1,609 +1,1027 @@
 import { useState } from "react";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { useSecretTrigger } from "@/hooks/use-secret-trigger";
-import generatedImage from "@assets/generated_images/physics_diagram_of_projectile_motion_sketches.png";
-import { Menu, ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Menu, Search } from "lucide-react";
 
 interface PYQViewProps {
   onUnlock: () => void;
 }
 
-export function PYQView({ onUnlock }: PYQViewProps) {
-  const trigger = useSecretTrigger(onUnlock);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+type SubjectKey = "maths" | "physics" | "chemistry";
 
-  // ---------------------------
-  // UPDATED: 48 unique 11th grade Maths JEE Mains questions
-  // ---------------------------
-  const dummyQuestions = [
-    {
-      id: 394826,
-      qNum: 3,
-      type: "Single Correct",
-      text: "If α and β are the roots of the equation x² - 3x + 2 = 0, then the equation whose roots are α² and β² is:",
-      options: ["x² - 5x + 4 = 0", "x² - 7x + 10 = 0", "x² - 5x + 6 = 0", "x² - 7x + 12 = 0"],
-    },
-    {
-      id: 394827,
-      qNum: 4,
-      type: "Multiple Correct",
-      text: "For the quadratic equation x² + px + q = 0, if p and q are real numbers and the roots are real and equal, then:",
-      options: ["p² = 4q", "p = 2√q", "q > 0", "p < 0"],
-    },
-    {
-      id: 394828,
-      qNum: 5,
-      type: "Integer Type",
-      text: "The number of terms in the expansion of (1 + x)^10 is:",
-      options: [],
-    },
-    {
-      id: 394829,
-      qNum: 6,
-      type: "Single Correct",
-      text: "The coefficient of x^3 in the expansion of (1 + x + x²)^5 is:",
-      options: ["10", "15", "20", "25"],
-    },
-    {
-      id: 394830,
-      qNum: 7,
-      type: "Multiple Correct",
-      text: "In an arithmetic progression, if the first term is a and common difference is d, then the nth term is:",
-      options: ["a + (n-1)d", "a + nd", "a - (n-1)d", "a - nd"],
-    },
-    {
-      id: 394831,
-      qNum: 8,
-      type: "Single Correct",
-      text: "The sum of the first 20 terms of the series 1 + 3 + 5 + ... is:",
-      options: ["400", "200", "100", "50"],
-    },
-    {
-      id: 394832,
-      qNum: 9,
-      type: "Integer Type",
-      text: "The value of n for which the sum of the first n natural numbers is 5050 is:",
-      options: [],
-    },
-    {
-      id: 394833,
-      qNum: 10,
-      type: "Single Correct",
-      text: "The general term of the sequence 1, 4, 9, 16, ... is:",
-      options: ["n²", "n", "2n", "n³"],
-    },
-    {
-      id: 394834,
-      qNum: 11,
-      type: "Multiple Correct",
-      text: "For the function f(x) = x² - 4x + 3, which of the following are true?",
-      options: ["f(1) = 0", "f(3) = 0", "Minimum value is -1", "Maximum value is 3"],
-    },
-    {
-      id: 394835,
-      qNum: 12,
-      type: "Single Correct",
-      text: "The derivative of x³ with respect to x is:",
-      options: ["3x²", "x²", "3x", "x³"],
-    },
-    {
-      id: 394836,
-      qNum: 13,
-      type: "Single Correct",
-      text: "The integral of 2x dx is:",
-      options: ["x² + c", "2x² + c", "x + c", "2x + c"],
-    },
-    {
-      id: 394837,
-      qNum: 14,
-      type: "Multiple Correct",
-      text: "In coordinate geometry, the distance between points (1,2) and (3,4) is:",
-      options: ["√8", "2√2", "4", "√4"],
-    },
-    {
-      id: 394838,
-      qNum: 15,
-      type: "Integer Type",
-      text: "The number of ways to choose 2 items from 5 distinct items is:",
-      options: [],
-    },
-    {
-      id: 394839,
-      qNum: 16,
-      type: "Single Correct",
-      text: "The probability of getting a head when a fair coin is tossed is:",
-      options: ["1/2", "1/4", "1", "0"],
-    },
-    {
-      id: 394840,
-      qNum: 17,
-      type: "Multiple Correct",
-      text: "For a matrix A = [2 1; 1 2], which of the following are true?",
-      options: ["det(A) = 3", "A is symmetric", "A is invertible", "trace(A) = 4"],
-    },
-    {
-      id: 394841,
-      qNum: 18,
-      type: "Single Correct",
-      text: "The solution of the differential equation dy/dx = 2x is:",
-      options: ["y = x² + c", "y = 2x + c", "y = x + c", "y = 2x² + c"],
-    },
-    {
-      id: 394842,
-      qNum: 19,
-      type: "Single Correct",
-      text: "The angle between vectors i and j is:",
-      options: ["90°", "0°", "180°", "45°"],
-    },
-    {
-      id: 394843,
-      qNum: 20,
-      type: "Multiple Correct",
-      text: "In trigonometry, sin(90° - θ) = cos θ, and cos(90° - θ) = sin θ. Which of the following are identities?",
-      options: ["sin²θ + cos²θ = 1", "tanθ = sinθ/cosθ", "secθ = 1/cosθ", "cotθ = cosθ/sinθ"],
-    },
-    {
-      id: 394844,
-      qNum: 21,
-      type: "Integer Type",
-      text: "The number of subsets of a set with 3 elements is:",
-      options: [],
-    },
-    {
-      id: 394845,
-      qNum: 22,
-      type: "Single Correct",
-      text: "The limit of (x² - 1)/(x - 1) as x approaches 1 is:",
-      options: ["2", "1", "0", "undefined"],
-    },
-    {
-      id: 394846,
-      qNum: 23,
-      type: "Multiple Correct",
-      text: "For the function f(x) = |x|, which of the following are true?",
-      options: ["f is continuous everywhere", "f is differentiable at x=0", "f'(x) = 1 for x > 0", "f'(x) = -1 for x < 0"],
-    },
-    {
-      id: 394847,
-      qNum: 24,
-      type: "Single Correct",
-      text: "The area under the curve y = x from 0 to 1 is:",
-      options: ["1/2", "1", "2", "0"],
-    },
-    {
-      id: 394848,
-      qNum: 25,
-      type: "Integer Type",
-      text: "The number of diagonals in a hexagon is:",
-      options: [],
-    },
-    {
-      id: 394849,
-      qNum: 26,
-      type: "Single Correct",
-      text: "The mean of the numbers 1, 2, 3, 4, 5 is:",
-      options: ["3", "2", "4", "5"],
-    },
-    {
-      id: 394850,
-      qNum: 27,
-      type: "Multiple Correct",
-      text: "In 3D geometry, the distance from point (1,2,3) to the origin is:",
-      options: ["√14", "√11", "√13", "√12"],
-    },
-    {
-      id: 394851,
-      qNum: 28,
-      type: "Single Correct",
-      text: "The binomial coefficient C(5,2) is:",
-      options: ["10", "5", "15", "20"],
-    },
-    {
-      id: 394852,
-      qNum: 29,
-      type: "Single Correct",
-      text: "The derivative of e^x is:",
-      options: ["e^x", "x e^x", "1/e^x", "ln x"],
-    },
-    {
-      id: 394853,
-      qNum: 30,
-      type: "Integer Type",
-      text: "The number of ways to arrange 3 distinct books on a shelf is:",
-      options: [],
-    },
-    {
-      id: 394854,
-      qNum: 31,
-      type: "Single Correct",
-      text: "The value of sin(30°) is:",
-      options: ["1/2", "√3/2", "1", "0"],
-    },
-    {
-      id: 394855,
-      qNum: 32,
-      type: "Multiple Correct",
-      text: "For the complex number z = 3 + 4i, which of the following are true?",
-      options: ["|z| = 5", "arg(z) = tan⁻¹(4/3)", "Re(z) = 3", "Im(z) = 4"],
-    },
-    {
-      id: 394856,
-      qNum: 33,
-      type: "Integer Type",
-      text: "The number of solutions to the equation x² - 5x + 6 = 0 is:",
-      options: [],
-    },
-    {
-      id: 394857,
-      qNum: 34,
-      type: "Single Correct",
-      text: "The determinant of the matrix [1 2; 3 4] is:",
-      options: ["-2", "2", "6", "8"],
-    },
-    {
-      id: 394858,
-      qNum: 35,
-      type: "Multiple Correct",
-      text: "In permutations, the number of ways to arrange 4 distinct letters is:",
-      options: ["24", "12", "6", "4"],
-    },
-    {
-      id: 394859,
-      qNum: 36,
-      type: "Single Correct",
-      text: "The expansion of (a + b)^3 is:",
-      options: ["a³ + 3a²b + 3ab² + b³", "a³ + a²b + ab² + b³", "a³ + 2a²b + 2ab² + b³", "a³ + b³"],
-    },
-    {
-      id: 394860,
-      qNum: 37,
-      type: "Integer Type",
-      text: "The sum of the geometric series 1 + 2 + 4 + ... up to 10 terms is:",
-      options: [],
-    },
-    {
-      id: 394861,
-      qNum: 38,
-      type: "Single Correct",
-      text: "The derivative of sin(x) is:",
-      options: ["cos(x)", "-sin(x)", "tan(x)", "sec(x)"],
-    },
-    {
-      id: 394862,
-      qNum: 39,
-      type: "Multiple Correct",
-      text: "For the function f(x) = x³, which of the following are true?",
-      options: ["f'(x) = 3x²", "f is increasing for x > 0", "f is odd", "f(0) = 0"],
-    },
-    {
-      id: 394863,
-      qNum: 40,
-      type: "Single Correct",
-      text: "The integral of cos(x) dx is:",
-      options: ["sin(x) + c", "-sin(x) + c", "tan(x) + c", "sec(x) + c"],
-    },
-    {
-      id: 394864,
-      qNum: 41,
-      type: "Integer Type",
-      text: "The number of faces in a cube is:",
-      options: [],
-    },
-    {
-      id: 394865,
-      qNum: 42,
-      type: "Single Correct",
-      text: "The slope of the line y = 2x + 3 is:",
-      options: ["2", "3", "1", "0"],
-    },
-    {
-      id: 394866,
-      qNum: 43,
-      type: "Multiple Correct",
-      text: "In 3D geometry, the equation of a plane is ax + by + cz = d. Which of the following are true?",
-      options: ["It is linear", "It divides space into two half-spaces", "It has infinite solutions", "It is always perpendicular to the normal vector"],
-    },
-    {
-      id: 394867,
-      qNum: 44,
-      type: "Single Correct",
-      text: "The dot product of vectors i and j is:",
-      options: ["0", "1", "-1", "2"],
-    },
-    {
-      id: 394868,
-      qNum: 45,
-      type: "Integer Type",
-      text: "The number of ways to select 3 items from 6 distinct items is:",
-      options: [],
-    },
-    {
-      id: 394869,
-      qNum: 46,
-      type: "Single Correct",
-      text: "The probability of rolling a 6 on a fair die is:",
-      options: ["1/6", "1/2", "1/3", "1/4"],
-    },
-    {
-      id: 394870,
-      qNum: 47,
-      type: "Multiple Correct",
-      text: "For the set {1,2,3}, which of the following are true?",
-      options: ["It has 8 subsets", "It has 6 permutations", "It is finite", "It contains 0"],
-    },
-    {
-      id: 394871,
-      qNum: 48,
-      type: "Single Correct",
-      text: "The limit of (sin x)/x as x approaches 0 is:",
-      options: ["1", "0", "∞", "-1"],
-    },
-    {
-      id: 394872,
-      qNum: 49,
-      type: "Integer Type",
-      text: "The number of edges in a tetrahedron is:",
-      options: [],
-    },
-    {
-      id: 394873,
-      qNum: 50,
-      type: "Single Correct",
-      text: "The variance of the data 1,2,3,4,5 is:",
-      options: ["2", "2.5", "3", "1"],
-    },
-  ];
+interface Question {
+  id: number;
+  chapter: string;
+  text: string;
+  options: [string, string, string, string];
+}
+
+interface SectionConfig {
+  key: SubjectKey;
+  shortLabel: string;
+  title: string;
+  subtitle: string;
+  chapters: string[];
+  questions: Question[];
+}
+
+type QuestionSeed = Omit<Question, "id">;
+
+const subjectOrder: SubjectKey[] = ["maths", "physics", "chemistry"];
+
+const subjectStyles: Record<
+  SubjectKey,
+  {
+    border: string;
+    badge: string;
+    chip: string;
+    option: string;
+    navActive: string;
+    summary: string;
+    summaryText: string;
+  }
+> = {
+  maths: {
+    border: "border-blue-200",
+    badge: "border-blue-200 bg-blue-50 text-blue-700",
+    chip: "bg-blue-100 text-blue-700",
+    option: "hover:border-blue-200 hover:bg-blue-50",
+    navActive: "border-blue-600 bg-blue-600 text-white shadow-sm",
+    summary: "from-blue-50 to-white",
+    summaryText: "text-blue-700",
+  },
+  physics: {
+    border: "border-emerald-200",
+    badge: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    chip: "bg-emerald-100 text-emerald-700",
+    option: "hover:border-emerald-200 hover:bg-emerald-50",
+    navActive: "border-emerald-600 bg-emerald-600 text-white shadow-sm",
+    summary: "from-emerald-50 to-white",
+    summaryText: "text-emerald-700",
+  },
+  chemistry: {
+    border: "border-amber-200",
+    badge: "border-amber-200 bg-amber-50 text-amber-700",
+    chip: "bg-amber-100 text-amber-700",
+    option: "hover:border-amber-200 hover:bg-amber-50",
+    navActive: "border-amber-600 bg-amber-600 text-white shadow-sm",
+    summary: "from-amber-50 to-white",
+    summaryText: "text-amber-700",
+  },
+};
+
+function buildQuestions(baseId: number, seeds: QuestionSeed[]): Question[] {
+  return seeds.map((seed, index) => ({
+    id: baseId + index + 1,
+    ...seed,
+  }));
+}
+
+const mathsQuestions = buildQuestions(12000, [
+  {
+    chapter: "Differentiation",
+    text: "The derivative of sin x with respect to x is:",
+    options: ["cos x", "-cos x", "sin x", "-sin x"],
+  },
+  {
+    chapter: "Differentiation",
+    text: "If y = x^3 + 2x, then dy/dx at x = 1 is:",
+    options: ["5", "3", "4", "1"],
+  },
+  {
+    chapter: "Definite Integrals",
+    text: "The value of integral from 0 to 1 of 2x dx is:",
+    options: ["1", "0", "2", "1/2"],
+  },
+  {
+    chapter: "Integrals",
+    text: "An antiderivative of sec^2 x is:",
+    options: ["tan x + C", "cot x + C", "sec x + C", "sin x + C"],
+  },
+  {
+    chapter: "Differential Equations",
+    text: "The general solution of dy/dx = 4y is:",
+    options: ["y = Ce^(4x)", "y = 4Ce^x", "y = C + 4x", "y = Ce^x"],
+  },
+  {
+    chapter: "Determinants",
+    text: "The determinant of the matrix [ [1, 2], [3, 4] ] is:",
+    options: ["-2", "2", "10", "0"],
+  },
+  {
+    chapter: "Matrices",
+    text: "The inverse of the matrix [ [1, 0], [0, 2] ] is:",
+    options: [
+      "[ [1, 0], [0, 1/2] ]",
+      "[ [2, 0], [0, 1] ]",
+      "[ [1/2, 0], [0, 1] ]",
+      "[ [1, 0], [0, 2] ]",
+    ],
+  },
+  {
+    chapter: "Matrices",
+    text: "If A = [ [2, 0], [0, 2] ], then A^-1 equals:",
+    options: ["(1/2)I", "2I", "I", "0"],
+  },
+  {
+    chapter: "Vector Algebra",
+    text: "The magnitude of i + j + 2k is:",
+    options: ["sqrt(6)", "2", "3", "sqrt(5)"],
+  },
+  {
+    chapter: "Vector Algebra",
+    text: "The angle between unit vectors i and j is:",
+    options: ["90 degrees", "45 degrees", "0 degrees", "180 degrees"],
+  },
+  {
+    chapter: "Three Dimensional Geometry",
+    text: "A point on the z-axis satisfying x + y + z = 6 is:",
+    options: ["(0, 0, 6)", "(6, 0, 0)", "(0, 6, 0)", "(1, 1, 4)"],
+  },
+  {
+    chapter: "Three Dimensional Geometry",
+    text: "The distance between points (1, 2, 3) and (1, 2, 8) is:",
+    options: ["5", "3", "8", "sqrt(25) / 2"],
+  },
+  {
+    chapter: "Probability",
+    text: "A bag has 5 red and 3 blue balls. The probability of drawing a red ball is:",
+    options: ["5/8", "3/8", "1/2", "2/5"],
+  },
+  {
+    chapter: "Probability",
+    text: "The probability of getting at least one head in two coin tosses is:",
+    options: ["3/4", "1/4", "1/2", "2/3"],
+  },
+  {
+    chapter: "Continuity",
+    text: "The limit of (x^2 - 1) / (x - 1) as x approaches 1 is:",
+    options: ["2", "1", "0", "Does not exist"],
+  },
+  {
+    chapter: "Application of Derivatives",
+    text: "The function y = -x^2 + 4x + 1 attains its maximum at x =",
+    options: ["2", "1", "4", "-2"],
+  },
+  {
+    chapter: "Application of Derivatives",
+    text: "The slope of the tangent to y = x^2 at x = 3 is:",
+    options: ["6", "3", "9", "2"],
+  },
+  {
+    chapter: "Integrals",
+    text: "The integral of 1/x dx is:",
+    options: ["log|x| + C", "1/(x^2) + C", "x + C", "e^x + C"],
+  },
+  {
+    chapter: "Definite Integrals",
+    text: "The value of integral from 0 to pi of sin x dx is:",
+    options: ["2", "0", "1", "pi"],
+  },
+  {
+    chapter: "Matrices",
+    text: "The solution of x + y = 5 and x - y = 1 is:",
+    options: ["x = 3, y = 2", "x = 2, y = 3", "x = 4, y = 1", "x = 1, y = 4"],
+  },
+  {
+    chapter: "Determinants",
+    text: "If a determinant has two equal rows, its value is:",
+    options: ["0", "1", "-1", "Cannot be decided"],
+  },
+  {
+    chapter: "Linear Programming",
+    text: "The value of Z = 3x + 2y at the point (2, 1) is:",
+    options: ["8", "7", "6", "9"],
+  },
+  {
+    chapter: "Vector Algebra",
+    text: "The magnitude of i x j is:",
+    options: ["1", "0", "sqrt(2)", "2"],
+  },
+  {
+    chapter: "Three Dimensional Geometry",
+    text: "If l, m and n are direction cosines, then:",
+    options: ["l^2 + m^2 + n^2 = 1", "l + m + n = 1", "lm + mn + nl = 1", "lmn = 1"],
+  },
+  {
+    chapter: "Differentiation",
+    text: "The derivative of ln x is:",
+    options: ["1/x", "x", "ln x", "e^x"],
+  },
+  {
+    chapter: "Integrals",
+    text: "The integral of e^x dx is:",
+    options: ["e^x + C", "xe^x + C", "ln x + C", "1/e^x + C"],
+  },
+  {
+    chapter: "Differential Equations",
+    text: "If dy/dx = 3x^2 and y = 0 at x = 0, then y at x = 1 is:",
+    options: ["1", "3", "0", "1/3"],
+  },
+  {
+    chapter: "Definite Integrals",
+    text: "The area under y = 2 from x = 0 to x = 3 is:",
+    options: ["6", "3", "5", "9"],
+  },
+  {
+    chapter: "Determinants",
+    text: "The determinant of the identity matrix of order 2 is:",
+    options: ["1", "0", "2", "-1"],
+  },
+  {
+    chapter: "Probability",
+    text: "If P(A) = 1/2 and P(B) = 1/3 for independent events, then P(A intersection B) is:",
+    options: ["1/6", "5/6", "2/3", "1/5"],
+  },
+]);
+
+const physicsQuestions = buildQuestions(22000, [
+  {
+    chapter: "Electrostatics",
+    text: "The SI unit of electric field is:",
+    options: ["N/C", "J/C", "C/N", "V/m^2"],
+  },
+  {
+    chapter: "Electrostatics",
+    text: "The work done in moving a test charge around a closed path in an electrostatic field is:",
+    options: ["0", "Positive", "Negative", "Infinite"],
+  },
+  {
+    chapter: "Capacitance",
+    text: "The SI unit of capacitance is:",
+    options: ["farad", "henry", "ohm", "weber"],
+  },
+  {
+    chapter: "Current Electricity",
+    text: "The equivalent resistance of 2 ohm and 3 ohm resistors in series is:",
+    options: ["5 ohm", "1.2 ohm", "6 ohm", "2.5 ohm"],
+  },
+  {
+    chapter: "Current Electricity",
+    text: "A 12 V battery is connected across a 4 ohm resistor. The current is:",
+    options: ["3 A", "4 A", "48 A", "1/3 A"],
+  },
+  {
+    chapter: "Current Electricity",
+    text: "The resistance of an ideal voltmeter is:",
+    options: ["Very high", "Zero", "Equal to 1 ohm", "Equal to the circuit resistance"],
+  },
+  {
+    chapter: "Moving Charges and Magnetism",
+    text: "The direction of magnetic field around a straight current carrying conductor is given by:",
+    options: ["Right hand thumb rule", "Left hand rule", "Fleming's left hand rule", "Lenz's law"],
+  },
+  {
+    chapter: "Moving Charges and Magnetism",
+    text: "The magnetic force on a charged particle moving parallel to a magnetic field is:",
+    options: ["Zero", "Maximum", "Half the maximum value", "Equal to qvB"],
+  },
+  {
+    chapter: "Magnetism",
+    text: "The magnetic field inside a long solenoid is approximately:",
+    options: ["Uniform", "Zero", "Circular", "Random"],
+  },
+  {
+    chapter: "Electromagnetic Induction",
+    text: "Lenz's law is a consequence of the law of:",
+    options: ["Conservation of energy", "Conservation of momentum", "Gravitation", "Inertia"],
+  },
+  {
+    chapter: "Electromagnetic Induction",
+    text: "An emf is induced in a circuit when there is a change in:",
+    options: ["Magnetic flux", "Electric charge", "Resistance", "Mass"],
+  },
+  {
+    chapter: "Alternating Current",
+    text: "A transformer works on the principle of:",
+    options: ["Mutual induction", "Self induction", "Electrolysis", "Rectification"],
+  },
+  {
+    chapter: "Alternating Current",
+    text: "The rms value of an alternating voltage of peak value V0 is:",
+    options: ["V0 / sqrt(2)", "sqrt(2)V0", "V0 / 2", "2V0"],
+  },
+  {
+    chapter: "Alternating Current",
+    text: "The power factor of a pure resistor in AC circuit is:",
+    options: ["1", "0", "1/2", "sqrt(2)"],
+  },
+  {
+    chapter: "Ray Optics",
+    text: "The mirror formula is:",
+    options: ["1/f = 1/v + 1/u", "f = uv", "1/u = 1/v + 1/f", "u + v = f"],
+  },
+  {
+    chapter: "Ray Optics",
+    text: "The SI unit of power of a lens is:",
+    options: ["dioptre", "metre", "watt", "candela"],
+  },
+  {
+    chapter: "Ray Optics",
+    text: "Total internal reflection occurs when light travels from:",
+    options: [
+      "A denser medium to a rarer medium with angle greater than critical angle",
+      "A rarer medium to a denser medium",
+      "Vacuum to air only",
+      "A denser medium to a denser medium",
+    ],
+  },
+  {
+    chapter: "Wave Optics",
+    text: "In Young's double slit experiment, fringe width is given by:",
+    options: ["lambda D / d", "lambda d / D", "D / lambda d", "d / lambda D"],
+  },
+  {
+    chapter: "Ray Optics",
+    text: "When an object is placed at 2f of a convex lens, the image formed is:",
+    options: [
+      "Real, inverted and same size at 2f",
+      "Virtual and magnified",
+      "Real and highly diminished at f",
+      "Virtual and erect at infinity",
+    ],
+  },
+  {
+    chapter: "Dual Nature of Radiation and Matter",
+    text: "The photoelectric effect supports the:",
+    options: ["Particle nature of light", "Wave nature of light only", "Magnetic nature of light", "Gravitational nature of light"],
+  },
+  {
+    chapter: "Dual Nature of Radiation and Matter",
+    text: "The de Broglie wavelength of a particle is inversely proportional to its:",
+    options: ["Momentum", "Mass only", "Speed only", "Charge"],
+  },
+  {
+    chapter: "Nuclei",
+    text: "The half life T of a radioactive substance is related to decay constant lambda by:",
+    options: ["T = 0.693 / lambda", "T = lambda / 0.693", "T = lambda", "T = 1 / lambda^2"],
+  },
+  {
+    chapter: "Nuclei",
+    text: "Isotopes of an element differ in the number of:",
+    options: ["Neutrons", "Protons", "Electrons in neutral atoms", "Valence electrons"],
+  },
+  {
+    chapter: "Semiconductor Electronics",
+    text: "Doping silicon with a pentavalent impurity produces a:",
+    options: ["n-type semiconductor", "p-type semiconductor", "metallic conductor", "superconductor"],
+  },
+  {
+    chapter: "Semiconductor Electronics",
+    text: "A diode conducts easily when it is:",
+    options: ["Forward biased", "Reverse biased", "Unbiased", "Connected to AC only"],
+  },
+  {
+    chapter: "Semiconductor Electronics",
+    text: "The output of a NOT gate for input 1 is:",
+    options: ["0", "1", "Both 0 and 1", "Undefined"],
+  },
+  {
+    chapter: "Capacitance",
+    text: "The energy stored in a capacitor is:",
+    options: ["1/2 CV^2", "CV", "V^2 / C", "2CV^2"],
+  },
+  {
+    chapter: "Current Electricity",
+    text: "For a metallic conductor, resistance with increase in temperature generally:",
+    options: ["Increases", "Decreases", "Becomes zero", "Remains constant always"],
+  },
+  {
+    chapter: "Wave Optics",
+    text: "Optical fibres work on the principle of:",
+    options: ["Total internal reflection", "Diffraction", "Polarisation", "Dispersion"],
+  },
+  {
+    chapter: "Moving Charges and Magnetism",
+    text: "The magnetic force on a moving charge is maximum when the angle between v and B is:",
+    options: ["90 degrees", "0 degrees", "45 degrees", "180 degrees"],
+  },
+]);
+
+const chemistryQuestions = buildQuestions(32000, [
+  {
+    chapter: "Solutions",
+    text: "The unit of molarity is:",
+    options: ["mol L^-1", "mol kg^-1", "g L^-1", "mol^-1 L"],
+  },
+  {
+    chapter: "Solutions",
+    text: "For ideal NaCl in water, the van't Hoff factor is approximately:",
+    options: ["2", "1", "3", "0.5"],
+  },
+  {
+    chapter: "Electrochemistry",
+    text: "Oxidation takes place at the:",
+    options: ["Anode", "Cathode", "Salt bridge", "Electrolyte only"],
+  },
+  {
+    chapter: "Electrochemistry",
+    text: "Conductivity of a solution generally increases when the number of ions in solution:",
+    options: ["Increases", "Decreases", "Becomes zero", "Remains fixed"],
+  },
+  {
+    chapter: "Chemical Kinetics",
+    text: "For a first order reaction, the half life is:",
+    options: [
+      "Independent of initial concentration",
+      "Directly proportional to initial concentration",
+      "Inversely proportional to initial concentration",
+      "Always zero",
+    ],
+  },
+  {
+    chapter: "Chemical Kinetics",
+    text: "A catalyst increases the rate of reaction by:",
+    options: ["Lowering activation energy", "Increasing delta H", "Increasing molecular mass", "Changing the products"],
+  },
+  {
+    chapter: "Surface Chemistry",
+    text: "The Tyndall effect is shown by:",
+    options: ["Colloids", "True solutions", "Pure solids", "Electrolytes only"],
+  },
+  {
+    chapter: "Surface Chemistry",
+    text: "Adsorption is generally:",
+    options: ["Exothermic", "Endothermic", "Neutral", "Impossible at low temperature"],
+  },
+  {
+    chapter: "Solid State",
+    text: "The packing efficiency of an fcc crystal is:",
+    options: ["74%", "52%", "68%", "100%"],
+  },
+  {
+    chapter: "Solutions",
+    text: "According to Raoult's law, vapour pressure of an ideal solution depends on the:",
+    options: ["Mole fraction of components", "Colour of solute", "Shape of container", "Pressure of atmosphere only"],
+  },
+  {
+    chapter: "Electrochemistry",
+    text: "A species with more positive standard reduction potential behaves as a:",
+    options: ["Stronger oxidising agent", "Stronger reducing agent", "Weaker oxidising agent", "Catalyst only"],
+  },
+  {
+    chapter: "Electrochemistry",
+    text: "During electrolysis of CuSO4 using copper electrodes, the mass of the cathode:",
+    options: ["Increases", "Decreases", "Remains unchanged", "Becomes zero"],
+  },
+  {
+    chapter: "Coordination Compounds",
+    text: "The coordination number of cobalt in [Co(NH3)6]Cl3 is:",
+    options: ["6", "3", "4", "1"],
+  },
+  {
+    chapter: "Coordination Compounds",
+    text: "The correct IUPAC name of [Cu(NH3)4]SO4 is:",
+    options: [
+      "Tetraamminecopper(II) sulfate",
+      "Tetrammine copper sulfate",
+      "Copper ammine sulfate",
+      "Ammoniacopper sulfate",
+    ],
+  },
+  {
+    chapter: "d- and f-Block Elements",
+    text: "Transition elements are characterised by:",
+    options: [
+      "Partially filled d orbitals in atoms or common ions",
+      "Completely filled d orbitals only",
+      "Absence of variable oxidation states",
+      "Zero metallic character",
+    ],
+  },
+  {
+    chapter: "d- and f-Block Elements",
+    text: "Lanthanoid contraction leads to the similarity in size of:",
+    options: ["4d and 5d series elements", "s-block and p-block elements", "Halogens and noble gases", "Alkanes and alkenes"],
+  },
+  {
+    chapter: "Haloalkanes and Haloarenes",
+    text: "Bromoethane on heating with aqueous KOH gives:",
+    options: ["Ethanol", "Ethene", "Ethanal", "Ethanoic acid"],
+  },
+  {
+    chapter: "Haloalkanes and Haloarenes",
+    text: "Chlorobenzene is less reactive than chloroethane in nucleophilic substitution mainly because of:",
+    options: ["Resonance in C-Cl bond", "Higher boiling point", "Lower density", "Absence of chlorine"],
+  },
+  {
+    chapter: "Alcohols, Phenols and Ethers",
+    text: "Ethanol reacts with sodium metal to liberate:",
+    options: ["Hydrogen gas", "Oxygen gas", "Nitrogen gas", "Carbon dioxide"],
+  },
+  {
+    chapter: "Alcohols, Phenols and Ethers",
+    text: "Phenol is more acidic than ethanol because:",
+    options: [
+      "Phenoxide ion is resonance stabilised",
+      "Phenol has higher molar mass",
+      "Ethanol is unsaturated",
+      "Phenol contains a ketone group",
+    ],
+  },
+  {
+    chapter: "Aldehydes, Ketones and Carboxylic Acids",
+    text: "Aldehydes can be distinguished from ketones by:",
+    options: ["Tollens' reagent", "Bromine water only", "Baeyer's reagent only", "Litmus paper"],
+  },
+  {
+    chapter: "Aldehydes, Ketones and Carboxylic Acids",
+    text: "Which compound gives a positive iodoform test?",
+    options: ["Acetone", "Methanal", "Benzene", "Methanoic acid"],
+  },
+  {
+    chapter: "Aldehydes, Ketones and Carboxylic Acids",
+    text: "Carboxylic acids react with NaHCO3 to release:",
+    options: ["CO2", "O2", "H2", "Cl2"],
+  },
+  {
+    chapter: "Amines",
+    text: "Amines are basic because nitrogen has a:",
+    options: ["Lone pair of electrons", "Positive charge", "Double bond to oxygen", "High atomic mass"],
+  },
+  {
+    chapter: "Amines",
+    text: "Diazotisation of aniline is carried out at:",
+    options: ["273 to 278 K", "350 K", "Room temperature only", "Below 200 K"],
+  },
+  {
+    chapter: "Biomolecules",
+    text: "Glucose is classified as an:",
+    options: ["Aldohexose", "Ketopentose", "Amino acid", "Disaccharide"],
+  },
+  {
+    chapter: "Biomolecules",
+    text: "Proteins are polymers made of:",
+    options: ["Amino acids", "Monosaccharides", "Nucleotides", "Fatty acids"],
+  },
+  {
+    chapter: "Polymers",
+    text: "Nylon-6,6 is a:",
+    options: ["Condensation polymer", "Addition polymer", "Natural polymer", "Copolysaccharide"],
+  },
+  {
+    chapter: "Chemistry in Everyday Life",
+    text: "Aspirin is commonly used as an:",
+    options: ["Analgesic", "Antiseptic", "Disinfectant", "Tranquiliser"],
+  },
+  {
+    chapter: "Chemistry in Everyday Life",
+    text: "Soap cleans by the formation of:",
+    options: ["Micelles", "Crystals", "Radicals", "Polymers"],
+  },
+]);
+
+const questionSections: SectionConfig[] = [
+  {
+    key: "maths",
+    shortLabel: "Maths",
+    title: "Mathematics",
+    subtitle: "Calculus, algebra, vectors and probability revision for Class 12.",
+    chapters: [
+      "Differentiation",
+      "Integrals",
+      "Matrices",
+      "Vector Algebra",
+      "Probability",
+    ],
+    questions: mathsQuestions,
+  },
+  {
+    key: "physics",
+    shortLabel: "Physics",
+    title: "Physics",
+    subtitle: "Electricity, optics, modern physics and semiconductor practice.",
+    chapters: [
+      "Electrostatics",
+      "Current Electricity",
+      "EMI and AC",
+      "Optics",
+      "Modern Physics",
+    ],
+    questions: physicsQuestions,
+  },
+  {
+    key: "chemistry",
+    shortLabel: "Chemistry",
+    title: "Chemistry",
+    subtitle: "Physical, inorganic and organic Class 12 multiple choice review.",
+    chapters: [
+      "Solutions",
+      "Electrochemistry",
+      "Coordination",
+      "Organic Chemistry",
+      "Biomolecules",
+    ],
+    questions: chemistryQuestions,
+  },
+];
+
+export function PYQView({ onUnlock }: PYQViewProps) {
+  const trigger = useSecretTrigger(onUnlock, 5);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [activeSection, setActiveSection] = useState<SubjectKey>("maths");
+
+  const currentSectionIndex = subjectOrder.indexOf(activeSection);
+
+  const jumpToSection = (key: SubjectKey) => {
+    setActiveSection(key);
+    if (typeof document !== "undefined") {
+      document.getElementById(`subject-${key}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    }
+  };
+
+  const moveSection = (direction: -1 | 1) => {
+    const nextIndex = currentSectionIndex + direction;
+    if (nextIndex < 0 || nextIndex >= subjectOrder.length) return;
+    jumpToSection(subjectOrder[nextIndex]);
+  };
+
+  const activeSectionConfig =
+    questionSections.find((section) => section.key === activeSection) ??
+    questionSections[0];
 
   return (
-    <div className="flex h-screen w-full bg-[#f9f9f7] text-slate-900 font-sans overflow-hidden">
-      {/* Sidebar */}
-      <div
+    <div className="flex h-screen w-full overflow-hidden bg-[#f4efe6] text-slate-900">
+      <aside
         className={cn(
-          "flex-shrink-0 bg-[#f0f0ed] border-r border-slate-200 transition-all duration-300 ease-in-out hidden md:block",
-          sidebarOpen ? "w-64" : "w-0"
+          "hidden shrink-0 overflow-hidden border-r border-slate-200 bg-[#fbf8f2] transition-all duration-300 ease-in-out md:flex",
+          sidebarOpen ? "w-80" : "w-0 border-r-0"
         )}
       >
-        <div className="h-full flex flex-col">
-          <div className="p-4 border-b border-slate-200 flex items-center justify-between">
-            <h2 className="font-bold text-slate-700 text-sm uppercase tracking-wider">
-              Maths Archive
+        <div className="flex h-full w-80 flex-col">
+          <div className="border-b border-slate-200 px-6 py-5">
+            <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
+              Study Mode
+            </p>
+            <h2 className="mt-2 font-academic text-3xl text-slate-900">
+              BoardReady XII
             </h2>
+            <p className="mt-2 text-sm text-slate-500">
+              Class 12 PCM disguise with three subject sections and mobile-first
+              practice flow.
+            </p>
           </div>
-          <ScrollArea className="flex-1">
-            <div className="p-2 space-y-1">
-              {[
-                "Sets, Relations & Functions",
-                "Complex Numbers",
-                "Quadratic Equations",
-                "Matrices & Determinants",
-                "Permutations & Combinations",
-                "Binomial Theorem",
-                "Sequences & Series",
-                "Limits, Continuity & Differentiability",
-                "Application of Derivatives",
-                "Integrals",
-                "Differential Equations",
-                "Coordinate Geometry",
-                "3D Geometry",
-                "Vector Algebra",
-                "Statistics & Probability",
-                "Trigonometry",
-              ].map((topic, i) => (
+
+          <div className="space-y-2 px-4 py-4">
+            {questionSections.map((section, index) => {
+              const styles = subjectStyles[section.key];
+
+              return (
                 <button
-                  key={topic}
+                  key={section.key}
+                  type="button"
+                  onClick={() => jumpToSection(section.key)}
                   className={cn(
-                    "w-full text-left px-3 py-2 text-sm rounded-md transition-colors",
-                    i === 0
-                      ? "bg-white shadow-sm text-blue-900 font-medium"
-                      : "text-slate-600 hover:bg-white/50"
+                    "w-full rounded-2xl border px-4 py-4 text-left transition-all",
+                    activeSection === section.key
+                      ? styles.navActive
+                      : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
                   )}
                 >
-                  {i + 1}. {topic}
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] uppercase tracking-[0.22em] opacity-80">
+                        Section {index + 1}
+                      </p>
+                      <h3 className="mt-1 text-base font-semibold">
+                        {section.title}
+                      </h3>
+                    </div>
+                    <span className="rounded-full bg-black/5 px-3 py-1 text-xs font-medium">
+                      30 MCQs
+                    </span>
+                  </div>
+                  <p className="mt-2 text-sm opacity-80">{section.subtitle}</p>
                 </button>
+              );
+            })}
+          </div>
+
+          <div className="border-t border-slate-200 px-6 py-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Focus Chapters
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {activeSectionConfig.chapters.map((chapter) => (
+                <span
+                  key={chapter}
+                  className={cn(
+                    "rounded-full px-3 py-1 text-xs font-medium",
+                    subjectStyles[activeSectionConfig.key].chip
+                  )}
+                >
+                  {chapter}
+                </span>
               ))}
             </div>
-          </ScrollArea>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col h-full">
-        {/* Header */}
-        <header className="h-14 border-b border-slate-200 bg-white/80 backdrop-blur-sm flex items-center px-4 justify-between sticky top-0 z-10">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="hidden md:block p-1.5 hover:bg-slate-100 rounded-md text-slate-600"
-            >
-              <Menu size={20} />
-            </button>
-            <h1 className="font-semibold text-lg text-slate-800 truncate">
-              JEE Mains 2023 - Paper 1
-            </h1>
+            <p className="mt-4 text-sm leading-6 text-slate-500">
+              All 90 questions stay on one continuous study page, with Mathematics
+              first, then Physics, then Chemistry.
+            </p>
           </div>
-          <div className="flex items-center gap-2 text-slate-400">
-            <button className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+        </div>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="border-b border-slate-200 bg-[#fbf8f2]/95 px-4 py-3 backdrop-blur-sm md:px-6">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setSidebarOpen((open) => !open)}
+                className="hidden rounded-xl border border-slate-200 bg-white p-2 text-slate-600 transition-colors hover:bg-slate-50 md:inline-flex"
+              >
+                <Menu size={18} />
+              </button>
+
+              <div className="min-w-0">
+                <p className="text-[11px] uppercase tracking-[0.26em] text-slate-500">
+                  Class 12 Revision Desk
+                </p>
+                <h1 className="truncate font-academic text-2xl text-slate-900">
+                  PCM Mock Practice Pack
+                </h1>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="rounded-full border border-slate-200 bg-white p-2 text-slate-500 transition-colors hover:bg-slate-50"
+            >
               <Search size={18} />
             </button>
           </div>
         </header>
 
-        {/* Sub-Header */}
-        <div className="h-10 bg-slate-50 border-b border-slate-200 flex items-center justify-between px-4 text-xs text-slate-500">
-          <div className="flex gap-4">
-            <span className="hover:text-slate-800 cursor-pointer">Overview</span>
-            <span className="hover:text-slate-800 cursor-pointer">Analytics</span>
-            <span className="hover:text-slate-800 cursor-pointer font-medium text-blue-600 border-b-2 border-blue-600 h-10 flex items-center">
-              Questions
-            </span>
+        <div className="flex-1 overflow-y-auto bg-[#f6f1e8]">
+          <div className="mx-auto w-full max-w-5xl px-3 py-4 pb-10 md:px-8 md:py-8">
+            <StudyAllSectionsPage
+              activeSection={activeSection}
+              onOpenSection={jumpToSection}
+              onUnlock={trigger}
+            />
           </div>
-          <span className="text-slate-400 text-[10px]">Last updated: 2 hours ago</span>
         </div>
 
-        {/* Content Area */}
-        <ScrollArea className="flex-1 bg-[#f9f9f7]">
-          <div className="w-full p-2 md:p-12 md:max-w-3xl md:mx-auto space-y-8 pb-64 overflow-x-hidden">
-            {/* Question 1 */}
-            <article className="bg-white p-6 md:p-8 rounded-sm shadow-sm border border-slate-100">
-              <div className="flex items-baseline justify-between mb-4">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                  Q.1 • Single Correct
-                </span>
-                <span className="text-xs font-mono text-slate-400">ID: 394821</span>
-              </div>
+        <div className="border-t border-slate-200 bg-white/95 px-4 py-3 md:px-6">
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => moveSection(-1)}
+              disabled={currentSectionIndex === 0}
+              className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ChevronLeft size={16} />
+              Previous section
+            </button>
 
-              <div className="prose prose-slate max-w-none">
-                <p className="mb-4 text-lg leading-relaxed text-slate-800">
-                  A projectile is fired from the origin O at an angle of 45° with the
-                  horizontal. At the highest point P of its trajectory, the radial and
-                  transverse components of its acceleration with respect to P are:
-                </p>
+            <span className="text-xs font-medium uppercase tracking-[0.22em] text-slate-500">
+              {activeSectionConfig.title} | {currentSectionIndex + 1}/3
+            </span>
 
-                <div className="my-6 p-4 bg-slate-50 border border-slate-100 rounded flex justify-center">
-                  <img
-                    src={generatedImage}
-                    alt="Projectile Diagram"
-                    className="max-h-64 max-w-full mix-blend-multiply opacity-90"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-                  {[
-                    "Radial: g, Transverse: 0",
-                    "Radial: 0, Transverse: g",
-                    "Radial: g/√2, Transverse: g/√2",
-                    "Radial: g/2, Transverse: g/2",
-                  ].map((opt, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-3 p-3 rounded border border-slate-200 hover:bg-blue-50 hover:border-blue-200 cursor-pointer transition-all group"
-                    >
-                      <span className="w-6 h-6 rounded-full border border-slate-300 flex items-center justify-center text-xs font-medium text-slate-500 group-hover:border-blue-400 group-hover:text-blue-600">
-                        {String.fromCharCode(65 + i)}
-                      </span>
-                      <span className="text-slate-700 font-medium">{opt}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </article>
-
-            {/* Question 2 */}
-            <article className="bg-white p-6 md:p-8 rounded-sm shadow-sm border border-slate-100">
-              <div className="flex items-baseline justify-between mb-4">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                  Q.2 • Multiple Correct
-                </span>
-                <span className="text-xs font-mono text-slate-400">ID: 394825</span>
-              </div>
-              <div className="prose prose-slate max-w-none">
-                <p className="mb-4 text-lg leading-relaxed text-slate-800">
-                  A thin uniform rod of mass M and length L is hinged at one end O. It
-                  is released from rest from a horizontal position. When it becomes
-                  vertical:
-                </p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-                  {[
-                    "The angular velocity is √(3g/L)",
-                    "The angular momentum about O is M√(gL³)",
-                    "The force applied by the hinge is 5Mg/2",
-                    "The force applied by the hinge is 3Mg/2",
-                  ].map((opt, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-3 p-3 rounded border border-slate-200 hover:bg-blue-50 hover:border-blue-200 cursor-pointer transition-all group"
-                    >
-                      <span className="w-6 h-6 rounded-sm border border-slate-300 flex items-center justify-center text-xs font-medium text-slate-500 group-hover:border-blue-400 group-hover:text-blue-600">
-                        {String.fromCharCode(65 + i)}
-                      </span>
-                      <span className="text-slate-700 font-medium">{opt}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </article>
-
-            {/* Generated Questions 3 → 25 */}
-            {dummyQuestions.map((q) => (
-              <article
-                key={q.id}
-                className="bg-white p-6 md:p-8 rounded-sm shadow-sm border border-slate-100"
-              >
-                <div className="flex items-baseline justify-between mb-4">
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                    Q.{q.qNum} • {q.type}
-                  </span>
-                  <span className="text-xs font-mono text-slate-400">ID: {q.id}</span>
-                </div>
-                <div className="prose prose-slate max-w-none">
-                  <p className="mb-4 text-lg leading-relaxed text-slate-800">{q.text}</p>
-                  {q.type === "Integer Type" ? (
-                    <div className="mt-6">
-                      <label className="block text-sm font-medium text-slate-700 mb-2">
-                        Enter your answer:
-                      </label>
-                      <input
-                        type="number"
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        placeholder="Enter integer value"
-                      />
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-                      {q.options.map((opt, i) => (
-                        <div
-                          key={i}
-                          className="flex items-center gap-3 p-3 rounded border border-slate-200 hover:bg-blue-50 hover:border-blue-200 cursor-pointer transition-all group"
-                        >
-                          <span
-                            className={cn(
-                              "w-6 h-6 border border-slate-300 flex items-center justify-center text-xs font-medium text-slate-500 group-hover:border-blue-400 group-hover:text-blue-600",
-                              q.type === "Single Correct" ? "rounded-full" : "rounded-sm"
-                            )}
-                          >
-                            {String.fromCharCode(65 + i)}
-                          </span>
-                          <span className="text-slate-700 font-medium">{opt}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </article>
-            ))}
-
-            {/* Hidden Secret Trigger */}
-            <div className="mt-16 pt-8 border-t border-slate-200">
-              <div className="text-center space-y-4">
-                <p className="text-xs text-slate-400">© 2024 PYQ Master. All rights reserved.</p>
-                <p className="text-[10px] text-slate-300">
-                  Questions sourced from previous year papers. For educational purposes only.
-                </p>
-
-                <button
-                  onClick={trigger}
-                  className="text-[10px] text-slate-300 hover:text-slate-400 transition-colors cursor-pointer"
-                >
-                  Terms of Service · Privacy Policy · Contact Support
-                </button>
-
-                <p className="text-[9px] text-slate-200 mt-4">v2.4.1</p>
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => moveSection(1)}
+              disabled={currentSectionIndex === subjectOrder.length - 1}
+              className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next section
+              <ChevronRight size={16} />
+            </button>
           </div>
-        </ScrollArea>
-
-        <div className="h-12 border-t border-slate-200 bg-white flex items-center justify-between px-4 text-sm text-slate-500">
-          <button className="flex items-center gap-1 hover:text-slate-800">
-            <ChevronLeft size={16} /> Previous
-          </button>
-          <span className="font-mono text-xs">Page 1 of 14</span>
-          <button className="flex items-center gap-1 hover:text-slate-800">
-            Next <ChevronRight size={16} />
-          </button>
         </div>
       </div>
     </div>
+  );
+}
+
+function StudyAllSectionsPage({
+  activeSection,
+  onOpenSection,
+  onUnlock,
+}: {
+  activeSection: SubjectKey;
+  onOpenSection: (key: SubjectKey) => void;
+  onUnlock: () => void;
+}) {
+  return (
+    <div className="space-y-8">
+      <section className="rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-sm md:p-7">
+        <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+          <div className="max-w-2xl">
+            <p className="text-[11px] uppercase tracking-[0.28em] text-slate-500">
+              Board Pattern Set
+            </p>
+            <h2 className="mt-2 font-academic text-3xl text-slate-900 md:text-4xl">
+              Class 12 PCM Question Bank
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-slate-600 md:text-base">
+              All questions are back on one continuous page. Mathematics comes
+              first, then Physics, then Chemistry, with 30 multiple choice
+              questions in each section.
+            </p>
+          </div>
+
+          <div className="rounded-[24px] border border-slate-200 bg-[#f8f4eb] p-4 text-sm text-slate-600">
+            <p className="font-semibold text-slate-800">Practice plan</p>
+            <p className="mt-1">1 continuous page</p>
+            <p>90 MCQs total</p>
+            <p>Class 12 board-style cover</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid grid-cols-3 gap-2 md:gap-4">
+        {questionSections.map((section, index) => {
+          const styles = subjectStyles[section.key];
+
+          return (
+            <button
+              key={section.key}
+              type="button"
+              onClick={() => onOpenSection(section.key)}
+              className={cn(
+                "min-w-0 rounded-[22px] border bg-gradient-to-br px-2 py-3 text-center shadow-sm transition-transform hover:-translate-y-0.5 md:rounded-[28px] md:px-4 md:py-5",
+                styles.border,
+                styles.summary,
+                activeSection === section.key && "ring-2 ring-offset-2 ring-slate-300"
+              )}
+            >
+              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500 md:text-[11px]">
+                S{index + 1}
+              </p>
+              <h3 className="mt-2 font-academic text-lg text-slate-900 md:mt-3 md:text-3xl">
+                {section.shortLabel}
+              </h3>
+              <p className="mt-1 text-[11px] font-medium text-slate-600 md:text-sm">
+                30 questions
+              </p>
+              <p className={cn("mt-1 text-[10px] font-medium md:text-xs", styles.summaryText)}>
+                Tap to open
+              </p>
+            </button>
+          );
+        })}
+      </section>
+
+      {questionSections.map((section, sectionIndex) => {
+        const styles = subjectStyles[section.key];
+
+        return (
+          <section
+            key={section.key}
+            id={`subject-${section.key}`}
+            className="scroll-mt-24 space-y-4"
+          >
+            <div
+              className={cn(
+                "rounded-[28px] border bg-white p-5 shadow-sm md:p-6",
+                styles.border
+              )}
+            >
+              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div className="max-w-2xl">
+                  <span
+                    className={cn(
+                      "inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]",
+                      styles.badge
+                    )}
+                  >
+                    Section {sectionIndex + 1}
+                  </span>
+                  <h3 className="mt-3 font-academic text-3xl text-slate-900">
+                    {section.title}
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-600 md:text-base">
+                    {section.subtitle}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                  <p className="font-semibold text-slate-800">Section load</p>
+                  <p className="mt-1">30 multiple choice questions</p>
+                  <p>One long page layout</p>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {section.chapters.map((chapter) => (
+                  <span
+                    key={chapter}
+                    className={cn(
+                      "rounded-full px-3 py-1 text-xs font-medium",
+                      styles.chip
+                    )}
+                  >
+                    {chapter}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {section.questions.map((question, questionIndex) => (
+                <QuestionCard
+                  key={question.id}
+                  question={question}
+                  questionNumber={questionIndex + 1}
+                  sectionKey={section.key}
+                  secretOptionIndex={
+                    section.key === "chemistry" && questionIndex === 29 ? 3 : undefined
+                  }
+                  onSecretTap={
+                    section.key === "chemistry" && questionIndex === 29
+                      ? onUnlock
+                      : undefined
+                  }
+                />
+              ))}
+            </div>
+          </section>
+        );
+      })}
+
+      <div className="border-t border-slate-200 pt-8">
+        <div className="space-y-3 text-center">
+          <p className="text-xs text-slate-400">
+            BoardReady XII academic bundle for Class 12 revision sessions.
+          </p>
+          <p className="text-[11px] text-slate-300">
+            All 90 questions are on one page with Maths, Physics and Chemistry
+            sections.
+          </p>
+          <p className="text-[11px] text-slate-300">
+            Academic policy | help desk | revision support
+          </p>
+          <p className="text-[10px] text-slate-200">session 12.5</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QuestionCard({
+  question,
+  questionNumber,
+  sectionKey,
+  secretOptionIndex,
+  onSecretTap,
+}: {
+  question: Question;
+  questionNumber: number;
+  sectionKey: SubjectKey;
+  secretOptionIndex?: number;
+  onSecretTap?: () => void;
+}) {
+  const styles = subjectStyles[sectionKey];
+
+  return (
+    <article className="rounded-[26px] border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              Q{String(questionNumber).padStart(2, "0")}
+            </span>
+            <span
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs font-medium",
+                styles.badge
+              )}
+            >
+              {question.chapter}
+            </span>
+          </div>
+
+          <p className="mt-4 text-base leading-7 text-slate-800 md:text-lg">
+            {question.text}
+          </p>
+        </div>
+
+        <span className="text-xs font-mono text-slate-400">ID {question.id}</span>
+      </div>
+
+      <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
+        {question.options.map((option, index) => (
+          <button
+            key={`${question.id}-${index}`}
+            type="button"
+            onClick={secretOptionIndex === index ? onSecretTap : undefined}
+            className={cn(
+              "flex items-start gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left transition-colors",
+              styles.option
+            )}
+          >
+            <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500">
+              {String.fromCharCode(65 + index)}
+            </span>
+            <span className="text-sm leading-6 text-slate-700">{option}</span>
+          </button>
+        ))}
+      </div>
+    </article>
   );
 }

@@ -1739,8 +1739,8 @@ export async function registerRoutes(
                 const pushPayload = JSON.stringify({
                   title: `💬 ${senderName}`,
                   body: msgPreview,
-                  icon: '/favicon.png',
-                  badge: '/favicon.png',
+                  icon: '/study-app-icon-192.png',
+                  badge: '/study-app-icon-192.png',
                   tag: 'chat-notification',
                   requireInteraction: true,
                   silent: false,

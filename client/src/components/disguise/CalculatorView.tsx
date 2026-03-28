@@ -8,11 +8,10 @@ interface CalculatorViewProps {
 }
 
 export function CalculatorView({ onUnlock }: CalculatorViewProps) {
-  const trigger = useSecretTrigger(onUnlock);
+  const trigger = useSecretTrigger(onUnlock, 5);
   const [display, setDisplay] = useState("0");
   const [prevValue, setPrevValue] = useState<string | null>(null);
   const [operator, setOperator] = useState<string | null>(null);
-  const [showHistory, setShowHistory] = useState(false);
 
   const handleNum = (num: string) => {
     if (display === "0") {
@@ -100,16 +99,7 @@ export function CalculatorView({ onUnlock }: CalculatorViewProps) {
         <div className="bg-black/50 py-2 px-4 flex justify-between items-center text-[10px] text-white/20">
           <span>Scientific Calculator</span>
           <button 
-            onClick={() => {
-              setShowHistory(prev => {
-                if (!prev) {
-                  setTimeout(() => setShowHistory(false), 500);
-                  return true;
-                }
-                trigger();
-                return false;
-              });
-            }}
+            onClick={trigger}
             className="cursor-default select-none"
           >
             v3.2.1

@@ -369,7 +369,7 @@ const showBrowserNotification = (title: string, body: string, icon?: string, use
   if (swRegistration) {
     swRegistration.showNotification(title, {
       body,
-      icon: icon || "/favicon.png",
+      icon: icon || "/study-app-icon-192.png",
       tag: "chat-notification",
       vibrate: [300, 120, 300],
       renotify: true,
@@ -378,7 +378,7 @@ const showBrowserNotification = (title: string, body: string, icon?: string, use
   } else if (document.hidden) {
     new Notification(title, {
       body,
-      icon: icon || "/favicon.png",
+      icon: icon || "/study-app-icon-192.png",
       tag: "chat-notification"
     });
   }

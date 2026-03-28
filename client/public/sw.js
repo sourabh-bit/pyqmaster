@@ -3,7 +3,13 @@ const SW_VERSION = new URL(self.location.href).searchParams.get("v") || "dev";
 const STATIC_CACHE = `pyqmaster-static-${SW_VERSION}`;
 const RUNTIME_CACHE = `pyqmaster-runtime-${SW_VERSION}`;
 const CACHE_PREFIX = "pyqmaster-";
-const PRECACHE_URLS = ["/", "/index.html", "/manifest.json", "/favicon.png"];
+const PRECACHE_URLS = [
+  "/",
+  "/index.html",
+  "/manifest.json",
+  "/study-app-icon-192.png",
+  "/study-app-icon-512.png"
+];
 const IS_LOCALHOST =
   self.location.hostname === "localhost" ||
   self.location.hostname === "127.0.0.1";
@@ -113,8 +119,8 @@ self.addEventListener("push", (event) => {
 
   const options = {
     body: data.body || "You have a new message",
-    icon: data.icon || "/favicon.png",
-    badge: data.badge || "/favicon.png",
+    icon: data.icon || "/study-app-icon-192.png",
+    badge: data.badge || "/study-app-icon-192.png",
     vibrate: [300, 120, 300],
     tag: data.tag || "chat-notification",
     renotify: true,
