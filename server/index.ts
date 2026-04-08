@@ -93,8 +93,11 @@ app.use((req, res, next) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
-    res.status(status).json({ message });
-    throw err;
+    if (!res.headersSent) {
+      res.status(status).json({ message });
+    }
+
+    log(`Error ${status}: ${message}`, "server");
   });
 
   // ------------------------------
@@ -102,10 +105,23 @@ app.use((req, res, next) => {
   // ------------------------------
   if (isProduction) {
     const staticDir = path.join(process.cwd(), "dist/public");
+
+    app.get("/", (_req, res) => {
+      res.status(200).send("Server is running ✅");
+    });
+
     app.use(express.static(staticDir));
 
     // React SPA fallback
-    app.get("*", (req, res) => {
+    app.get("*", (req, res, next) => {
+      if (
+        req.path.startsWith("/api") ||
+        req.path === "/health" ||
+        req.path === "/ws"
+      ) {
+        return next();
+      }
+
       res.setHeader("Cache-Control", "no-store, must-revalidate");
       res.sendFile(path.join(staticDir, "index.html"));
     });
@@ -118,10 +134,11 @@ app.use((req, res, next) => {
   // 🚀 RENDER-SAFE SERVER START
   // ------------------------------
   // WebSocket stability fixes
+  httpServer.setTimeout(120000);
   httpServer.keepAliveTimeout = 65000;
   httpServer.headersTimeout = 66000;
 
-  httpServer.listen(PORT, "0.0.0.0", () => {
+  httpServer.listen(PORT, () => {
     log(`Server running on port ${PORT}`);
   });
 })().catch((error) => {
