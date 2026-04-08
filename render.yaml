@@ -6,7 +6,7 @@ services:
     autoDeploy: true
 
     buildCommand: npm install && npm run build
-
+    healthCheckPath: /health
     startCommand: "node dist/index.cjs"
     headers:
       - key: Connection

@@ -105,11 +105,6 @@ app.use((req, res, next) => {
   // ------------------------------
   if (isProduction) {
     const staticDir = path.join(process.cwd(), "dist/public");
-
-    app.get("/", (_req, res) => {
-      res.status(200).send("Server is running ✅");
-    });
-
     app.use(express.static(staticDir));
 
     // React SPA fallback
@@ -138,7 +133,7 @@ app.use((req, res, next) => {
   httpServer.keepAliveTimeout = 65000;
   httpServer.headersTimeout = 66000;
 
-  httpServer.listen(PORT, () => {
+  httpServer.listen(PORT, "0.0.0.0", () => {
     log(`Server running on port ${PORT}`);
   });
 })().catch((error) => {
