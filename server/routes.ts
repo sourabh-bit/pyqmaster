@@ -37,12 +37,13 @@ const GATEKEEPER_STATE_PATH = path.join(
   "data",
   "gatekeeper-state.json"
 );
+const STARTUP_INIT_TIMEOUT_MS = 10_000;
 
 const hasDatabase = !!process.env.DATABASE_URL;
 let db: any = null;
 
-let adminUserId: string;
-let friendUserId: string;
+let adminUserId = "admin-temp-id";
+let friendUserId = "friend-temp-id";
 
 // Lazy cleanup time guard
 let lastCleanupTime = 0;
@@ -388,12 +389,37 @@ const sendMessageQueuedAck = (
   );
 };
 
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string
+): Promise<T> => {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+};
+
 // ---------- MAIN REGISTER ROUTES ----------
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  console.log("[BOOT] registerRoutes started");
+
   // -------- HEALTH --------
   app.get("/health", (req, res) => {
     res
@@ -405,11 +431,22 @@ export async function registerRoutes(
 
   let currentGatekeeperKey = GATEKEEPER_KEY;
   let gatekeeperChangedAt: string | null = null;
-  const gatekeeperState = await loadGatekeeperState();
-  if (gatekeeperState?.key) {
-    currentGatekeeperKey = gatekeeperState.key;
-    gatekeeperChangedAt = gatekeeperState.changedAt;
-  }
+  void (async () => {
+    try {
+      const gatekeeperState = await withTimeout(
+        loadGatekeeperState(),
+        STARTUP_INIT_TIMEOUT_MS,
+        "loadGatekeeperState"
+      );
+
+      if (gatekeeperState?.key) {
+        currentGatekeeperKey = gatekeeperState.key;
+        gatekeeperChangedAt = gatekeeperState.changedAt;
+      }
+    } catch (error) {
+      console.error("[BOOT] Gatekeeper state initialization failed:", error);
+    }
+  })();
 
   app.post("/api/auth/gatekeeper/verify", (req, res) => {
     const { key } = req.body;
@@ -2139,16 +2176,37 @@ export async function registerRoutes(
 
   // -------- INIT DB + INDEXES --------
 
-  await initializeDatabase();
-  console.log(
-    "[DB] hasDatabase=",
-    hasDatabase,
-    "adminUserId=",
-    adminUserId,
-    "friendUserId=",
-    friendUserId
-  );
-  await ensureIndexes();
+  void (async () => {
+    try {
+      await withTimeout(
+        initializeDatabase(),
+        STARTUP_INIT_TIMEOUT_MS,
+        "initializeDatabase"
+      );
+      console.log(
+        "[DB] hasDatabase=",
+        hasDatabase,
+        "adminUserId=",
+        adminUserId,
+        "friendUserId=",
+        friendUserId
+      );
+    } catch (error) {
+      console.error("[BOOT] Database initialization failed:", error);
+    }
+
+    try {
+      await withTimeout(
+        ensureIndexes(),
+        STARTUP_INIT_TIMEOUT_MS,
+        "ensureIndexes"
+      );
+    } catch (error) {
+      console.error("[BOOT] Index initialization failed:", error);
+    }
+  })();
+
+  console.log("[BOOT] registerRoutes completed");
 
   return httpServer;
 }
