@@ -61,10 +61,18 @@ app.use((req, res, next) => {
 });
 
 // ------------------------------
-// ROOT (ALWAYS 200)
+// ROOT STARTUP FALLBACK
 // ------------------------------
-app.get("/", (_req, res) => {
-  res.status(200).send("Server is running");
+app.get("/", (_req, res, next) => {
+  if (startupError) {
+    return res.status(500).send("Server startup failed");
+  }
+
+  if (!isServerReady) {
+    return res.status(503).send("Server is starting");
+  }
+
+  next();
 });
 
 // ------------------------------
