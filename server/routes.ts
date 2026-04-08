@@ -221,6 +221,22 @@ const getUserRoomKey = (userId: string): string => {
   return `user:${userId}`;
 };
 
+const pruneUserSockets = (userId: string) => {
+  const roomKey = getUserRoomKey(userId);
+  const sockets = userSockets.get(roomKey);
+  if (!sockets) return;
+
+  for (const ws of sockets) {
+    if (ws.readyState !== WebSocket.OPEN) {
+      sockets.delete(ws);
+    }
+  }
+
+  if (sockets.size === 0) {
+    userSockets.delete(roomKey);
+  }
+};
+
 const joinUserRoom = (userId: string, ws: WebSocket) => {
   const roomKey = getUserRoomKey(userId);
   if (!userSockets.has(roomKey)) {
@@ -245,6 +261,7 @@ const broadcastToUser = (
   data: any,
   excludeWs?: WebSocket
 ) => {
+  pruneUserSockets(userId);
   const roomKey = getUserRoomKey(userId);
   const sockets = userSockets.get(roomKey);
   if (!sockets) return;
@@ -258,6 +275,7 @@ const broadcastToUser = (
 };
 
 const broadcastToUserAll = (userId: string, data: any) => {
+  pruneUserSockets(userId);
   const roomKey = getUserRoomKey(userId);
   const sockets = userSockets.get(roomKey);
   if (!sockets) return;
@@ -271,6 +289,7 @@ const broadcastToUserAll = (userId: string, data: any) => {
 };
 
 const isUserOnline = (userId: string): boolean => {
+  pruneUserSockets(userId);
   const roomKey = getUserRoomKey(userId);
   const sockets = userSockets.get(roomKey);
   if (!sockets || sockets.size === 0) return false;
@@ -282,6 +301,7 @@ const isUserOnline = (userId: string): boolean => {
 };
 
 const getOnlineDeviceCount = (userId: string): number => {
+  pruneUserSockets(userId);
   const roomKey = getUserRoomKey(userId);
   const sockets = userSockets.get(roomKey);
   if (!sockets) return 0;
@@ -1251,6 +1271,17 @@ export async function registerRoutes(
       isAlive = false;
       try {
         ws.ping();
+        if (myUserId && myUserType) {
+          const peerUserType = myUserType === "admin" ? "friend" : "admin";
+          const peerUserId = getUserIdFromType(peerUserType);
+          ws.send(
+            JSON.stringify({
+              type: "presence",
+              peerOnline: isUserOnline(peerUserId),
+              timestamp: now,
+            })
+          );
+        }
       } catch {
         try {
           ws.terminate();

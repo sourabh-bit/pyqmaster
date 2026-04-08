@@ -1918,9 +1918,8 @@ const messagesList = useMemo(
                           ? isAppVisible
                             ? "Message"
                             : "Background mode"
-                          : "Connecting..."
+                          : "Message (will send when connected)"
                       }
-                      disabled={!isConnected}
                       rows={1}
                       className={cn(
                         "flex-1 bg-transparent text-[15px] leading-[1.5] text-zinc-100",
@@ -1942,7 +1941,7 @@ const messagesList = useMemo(
 
                   <button
                     type="submit"
-                    disabled={!isConnected || !inputText.trim()}
+                    disabled={!inputText.trim()}
                     className="p-2 sm:p-2.5 rounded-full bg-emerald-600 shrink-0 hover:bg-emerald-700 disabled:opacity-40"
                   >
                     <Send size={18} className="text-white" />

@@ -46,6 +46,18 @@ type CandidateRoute = "host" | "srflx" | "relay" | "unknown";
 
 const FIXED_ROOM_ID = 'secure-room-001';
 const OFFLINE_QUEUE_LIMIT = 200;
+const MESSAGE_ACK_TIMEOUT_MS = 15000;
+const PEER_PRESENCE_STALE_MS = 35000;
+
+const MESSAGE_STATUS_PRIORITY: Record<NonNullable<Message["status"]>, number> = {
+  sending: 0,
+  sent: 1,
+  delivered: 2,
+  read: 3,
+};
+
+const getStatusPriority = (status?: Message["status"]) =>
+  MESSAGE_STATUS_PRIORITY[status || "sending"] ?? 0;
 
 // Fetch user profile from server (source of truth)
 const fetchServerProfile = async (userType: 'admin' | 'friend'): Promise<{ name: string; avatar: string } | null> => {
@@ -115,6 +127,94 @@ const normalizeHistoryMessages = (input: any[]): Message[] => {
             ...m,
             timestamp: new Date(m.timestamp),
           }));
+};
+
+const mergeMessagesById = (prev: Message[], incoming: Message[]): Message[] => {
+  const messageMap = new Map<string, Message>();
+  prev.forEach((m) => messageMap.set(m.id, m));
+
+  for (const nextMessage of incoming) {
+    const existing = messageMap.get(nextMessage.id);
+    if (!existing) {
+      messageMap.set(nextMessage.id, nextMessage);
+      continue;
+    }
+
+    const existingPriority = getStatusPriority(existing.status);
+    const incomingPriority = getStatusPriority(nextMessage.status);
+
+    messageMap.set(nextMessage.id, {
+      ...existing,
+      ...nextMessage,
+      status: incomingPriority >= existingPriority ? nextMessage.status : existing.status,
+    });
+  }
+
+  return Array.from(messageMap.values()).sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
+};
+
+const loadCachedMessages = (userType: 'admin' | 'friend'): Message[] => {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const raw = localStorage.getItem(`chat_messages_${userType}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((m: any) => ({
+        ...m,
+        timestamp: new Date(m.timestamp),
+      }))
+      .filter((m: any) => typeof m.id === "string" && !Number.isNaN(new Date(m.timestamp).getTime()));
+  } catch (error) {
+    console.warn("[CACHE] failed to load cached messages", error);
+    return [];
+  }
+};
+
+const queuedPayloadToMessage = (
+  payload: any,
+  senderName: string
+): Message | null => {
+  if (!payload || payload.type !== "send-message" || typeof payload.id !== "string") {
+    return null;
+  }
+
+  const messageType = payload.messageType || "text";
+  const text =
+    typeof payload.text === "string"
+      ? payload.text
+      : "";
+  const mediaUrl =
+    typeof payload.mediaUrl === "string"
+      ? payload.mediaUrl
+      : undefined;
+
+  if (!text && !mediaUrl && messageType === "text") {
+    return null;
+  }
+
+  return {
+    id: payload.id,
+    text,
+    sender: "me",
+    timestamp: new Date(payload.timestamp || Date.now()),
+    type: messageType,
+    mediaUrl,
+    senderName,
+    status: "sending",
+    replyTo: payload.replyTo
+      ? {
+          id: String(payload.replyTo.id || ""),
+          text: String(payload.replyTo.text || ""),
+          sender: payload.replyTo.sender === "them" ? "them" : "me",
+        }
+      : undefined,
+  };
 };
 
 const parseEnvList = (value?: string) =>
@@ -493,9 +593,8 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     loadProfiles();
   }, [userType]);
 
-  // Initialize messages as empty - server is the source of truth
-  // localStorage is only used as a cache, not as initial state
-  const [messages, setMessages] = useState<Message[]>([]);
+  // Start from cache so optimistic/pending messages survive reconnects and reloads.
+  const [messages, setMessages] = useState<Message[]>(() => loadCachedMessages(userType));
   const [isLoadingMessages, setIsLoadingMessages] = useState(true);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [isLoadingOlderHistory, setIsLoadingOlderHistory] = useState(false);
@@ -563,6 +662,9 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   const processedMessageIds = useRef<Set<string>>(new Set());
   const isDocumentVisible = useRef<boolean>(!document.hidden);
   const offlineQueue = useRef<any[]>([]);
+  const inFlightMessageIdsRef = useRef<Set<string>>(new Set());
+  const pendingAckTimeoutsRef = useRef<Map<string, number>>(new Map());
+  const peerPresenceTimeoutRef = useRef<number | null>(null);
   const isIntentionalClose = useRef(false);
   const handleMessageRef = useRef<(data: any) => Promise<void>>(async () => {});
   const scheduleIceRecoveryRef = useRef<(reason: string) => void>(() => {});
@@ -609,6 +711,72 @@ export function useChatConnection(userType: 'admin' | 'friend') {
   useEffect(() => {
     isPolitePeerRef.current = userType === 'friend';
   }, [userType]);
+
+  const updateMessageStatus = useCallback((ids: string[], status: Message["status"]) => {
+    if (!Array.isArray(ids) || ids.length === 0 || !status) return;
+
+    setMessages((prev) =>
+      prev.map((message) => {
+        if (!ids.includes(message.id)) return message;
+        const currentPriority = getStatusPriority(message.status);
+        const nextPriority = getStatusPriority(status);
+        return nextPriority >= currentPriority
+          ? { ...message, status }
+          : message;
+      })
+    );
+  }, []);
+
+  const clearPendingAck = useCallback((messageId: string) => {
+    const timeoutId = pendingAckTimeoutsRef.current.get(messageId);
+    if (timeoutId != null) {
+      window.clearTimeout(timeoutId);
+      pendingAckTimeoutsRef.current.delete(messageId);
+    }
+    inFlightMessageIdsRef.current.delete(messageId);
+  }, []);
+
+  const schedulePeerPresenceExpiry = useCallback(() => {
+    if (peerPresenceTimeoutRef.current != null) {
+      window.clearTimeout(peerPresenceTimeoutRef.current);
+    }
+
+    peerPresenceTimeoutRef.current = window.setTimeout(() => {
+      setPeerConnected(false);
+      setIsPeerOnline(false);
+      setPeerProfile((prev) => ({
+        ...prev,
+        isTyping: false,
+        lastSeen: prev.lastSeen ?? new Date(),
+      }));
+    }, PEER_PRESENCE_STALE_MS);
+  }, []);
+
+  const markPeerPresence = useCallback((online: boolean, profile?: Partial<UserProfile>) => {
+    setPeerConnected(online);
+    setIsPeerOnline(online);
+    setPeerProfile((prev) => ({
+      ...prev,
+      ...profile,
+      isTyping:
+        typeof profile?.isTyping === "boolean"
+          ? profile.isTyping
+          : online
+          ? prev.isTyping
+          : false,
+      lastSeen: online ? null : profile?.lastSeen ?? prev.lastSeen ?? new Date(),
+    }));
+
+    if (online) {
+      schedulePeerPresenceExpiry();
+      return;
+    }
+
+    if (peerPresenceTimeoutRef.current != null) {
+      window.clearTimeout(peerPresenceTimeoutRef.current);
+      peerPresenceTimeoutRef.current = null;
+    }
+  }, [schedulePeerPresenceExpiry]);
 
   // Trigger a read receipt for a single message if chat is visible
   function tryMarkAsRead(message: Message) {
@@ -711,6 +879,17 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     }
   }, [offlineQueueStorageKey]);
 
+  const removeQueuedMessageById = useCallback((messageId: string) => {
+    const nextQueue = offlineQueue.current.filter(
+      (payload) => !(payload?.type === "send-message" && payload?.id === messageId)
+    );
+
+    if (nextQueue.length !== offlineQueue.current.length) {
+      offlineQueue.current = nextQueue;
+      persistOfflineQueue();
+    }
+  }, [persistOfflineQueue]);
+
   const enqueueOfflinePayload = useCallback((payload: any) => {
     if (payload.type === "send-message" && payload.id) {
       const exists = offlineQueue.current.some(
@@ -740,6 +919,37 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     }
   }, [userType]);
 
+  const ensureQueuedMessagesVisible = useCallback((payloads: any[]) => {
+    const outgoing = payloads
+      .map((payload) => queuedPayloadToMessage(payload, myProfileRef.current.name))
+      .filter((message): message is Message => Boolean(message));
+
+    if (outgoing.length === 0) return;
+
+    setMessages((prev) => mergeMessagesById(prev, outgoing));
+  }, []);
+
+  const scheduleMessageAckTimeout = useCallback((messageId: string) => {
+    clearPendingAck(messageId);
+
+    const timeoutId = window.setTimeout(() => {
+      pendingAckTimeoutsRef.current.delete(messageId);
+      inFlightMessageIdsRef.current.delete(messageId);
+      emitAppEvent("message_retry", { reason: "ack-timeout", messageId });
+
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        try {
+          ws.close();
+        } catch {
+          // ignore close errors
+        }
+      }
+    }, MESSAGE_ACK_TIMEOUT_MS);
+
+    pendingAckTimeoutsRef.current.set(messageId, timeoutId);
+  }, [clearPendingAck, emitAppEvent]);
+
   const sendSignal = useCallback((data: any, queueIfOffline = false) => {
     const payload = { ...data, roomId: FIXED_ROOM_ID };
     const ws = wsRef.current;
@@ -768,11 +978,27 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
     while (offlineQueue.current.length > 0 && ws.readyState === WebSocket.OPEN) {
       const payload = offlineQueue.current[0];
+      if (payload?.type === "send-message" && payload?.id) {
+        ensureQueuedMessagesVisible([payload]);
+        updateMessageStatus([payload.id], "sending");
+
+        if (inFlightMessageIdsRef.current.has(payload.id)) {
+          break;
+        }
+
+        try {
+          ws.send(JSON.stringify(payload));
+          inFlightMessageIdsRef.current.add(payload.id);
+          scheduleMessageAckTimeout(payload.id);
+          emitAppEvent("message_retry", { reason: "flushed", messageId: payload.id });
+        } catch {
+          inFlightMessageIdsRef.current.delete(payload.id);
+        }
+        break;
+      }
+
       try {
         ws.send(JSON.stringify(payload));
-        if (payload.type === "send-message") {
-          emitAppEvent("message_retry", { reason: "flushed", messageId: payload.id });
-        }
         offlineQueue.current.shift();
       } catch {
         break;
@@ -780,7 +1006,13 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     }
 
     persistOfflineQueue();
-  }, [persistOfflineQueue, emitAppEvent]);
+  }, [
+    ensureQueuedMessagesVisible,
+    emitAppEvent,
+    persistOfflineQueue,
+    scheduleMessageAckTimeout,
+    updateMessageStatus,
+  ]);
 
   useEffect(() => {
     try {
@@ -789,12 +1021,13 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         offlineQueue.current = parsed.slice(-OFFLINE_QUEUE_LIMIT);
+        ensureQueuedMessagesVisible(offlineQueue.current);
       }
     } catch (err) {
       console.warn("[WS] failed to load offline queue", err);
       offlineQueue.current = [];
     }
-  }, [offlineQueueStorageKey]);
+  }, [ensureQueuedMessagesVisible, offlineQueueStorageKey]);
 
   const createCallSessionId = useCallback(
     () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -1710,30 +1943,30 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     switch (data.type) {
       case 'joined':
       case 'room-joined': {
-        if (data.peerProfile) {
-          setPeerProfile((prev) => ({
-            ...prev,
-            ...data.peerProfile,
-            lastSeen: data.peerOnline ? null : prev.lastSeen,
-            isTyping: false
-          }));
-        }
-        setPeerConnected(Boolean(data.peerOnline));
-        setIsPeerOnline(Boolean(data.peerOnline));
+        markPeerPresence(
+          Boolean(data.peerOnline),
+          data.peerProfile
+            ? {
+                ...data.peerProfile,
+                isTyping: false,
+              }
+            : undefined
+        );
+        break;
+      }
+
+      case 'presence': {
+        markPeerPresence(Boolean(data.peerOnline));
         break;
       }
 
       case 'peer-joined': {
-        setPeerConnected(true);
-        setIsPeerOnline(true);
         const peerName = data.profile?.name || defaultPeerName;
-        setPeerProfile((prev) => ({
-          ...prev,
+        markPeerPresence(true, {
           name: data.profile?.name || '',
           avatar: data.profile?.avatar || '',
-          lastSeen: null,
           isTyping: false
-        }));
+        });
         toast({ title: `${peerName} is online!` });
 
         if (userType === 'admin') {
@@ -1754,14 +1987,8 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       }
 
       case 'peer-left': {
-        setPeerConnected(false);
-        setIsPeerOnline(false);
         const leftPeerName = peerProfileRef.current.name || defaultPeerName;
-        setPeerProfile((prev) => ({
-          ...prev,
-          lastSeen: new Date(),
-          isTyping: false
-        }));
+        markPeerPresence(false, { lastSeen: new Date(), isTyping: false });
         toast({ title: `${leftPeerName} went offline` });
         if (userType === 'admin') {
           logConnectionEvent(leftPeerName, 'Went offline');
@@ -1812,10 +2039,7 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       }
 
       case 'typing': {
-        setPeerProfile((prev) => ({
-          ...prev,
-          isTyping: Boolean(data.isTyping)
-        }));
+        markPeerPresence(true, { isTyping: Boolean(data.isTyping) });
         break;
       }
 
@@ -1853,6 +2077,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
           replyTo: data.replyTo
         };
 
+        if (incomingSender === 'them') {
+          schedulePeerPresenceExpiry();
+        }
+
         // Always merge: update existing or insert new
         setMessages((prev) => {
           const existingIndex = prev.findIndex((m) => m.id === msgId);
@@ -1860,11 +2088,8 @@ export function useChatConnection(userType: 'admin' | 'friend') {
           if (existingIndex >= 0) {
             // Update existing message (merge fields, preserve higher status)
             const existing = prev[existingIndex];
-            const statusPriority: Record<string, number> = {
-              'sent': 1, 'delivered': 2, 'read': 3
-            };
-            const existingPriority = statusPriority[existing.status || 'sent'] ?? 1;
-            const incomingPriority = statusPriority[incomingMsg.status || 'sent'] ?? 1;
+            const existingPriority = getStatusPriority(existing.status);
+            const incomingPriority = getStatusPriority(incomingMsg.status);
             
             const updated = [...prev];
             updated[existingIndex] = {
@@ -1900,6 +2125,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
         // Auto-mark incoming messages as read instantly
         if (incomingSender === 'them') {
           tryMarkAsRead(incomingMsg);
+        } else {
+          clearPendingAck(msgId);
+          removeQueuedMessageById(msgId);
+          flushOfflineQueue();
         }
 
         if (userType === 'admin' && incomingSender === 'them') {
@@ -2013,11 +2242,10 @@ export function useChatConnection(userType: 'admin' | 'friend') {
       case 'message-queued': {
         const queuedStatus: "sent" | "delivered" | "read" =
           data.status === "delivered" || data.status === "read" ? data.status : "sent";
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === data.id ? { ...m, status: queuedStatus } : m
-          )
-        );
+        updateMessageStatus([data.id], queuedStatus);
+        clearPendingAck(data.id);
+        removeQueuedMessageById(data.id);
+        flushOfflineQueue();
         break;
       }
 
@@ -2027,26 +2255,14 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
         if (!Array.isArray(data.ids) || !data.status) break;
 
-        const statusPriority: Record<string, number> = {
-          'sending': 0,
-          'sent': 1,
-          'delivered': 2,
-          'read': 3
-        };
-        const newStatusPriority = statusPriority[data.status] ?? 1;
-
-        setMessages(prev =>
-          prev.map(m => {
-            if (!data.ids.includes(m.id)) return m;
-
-            const currentPriority = statusPriority[m.status || 'sending'] ?? 0;
-            // Update if new status is higher or equal priority (ensure status is set)
-            if (newStatusPriority >= currentPriority) {
-              return { ...m, status: data.status as 'sent' | 'delivered' | 'read' };
-            }
-            return m;
-          })
-        );
+        updateMessageStatus(data.ids, data.status as 'sent' | 'delivered' | 'read');
+        if (data.status === "sent" || data.status === "delivered" || data.status === "read") {
+          data.ids.forEach((messageId: string) => {
+            clearPendingAck(messageId);
+            removeQueuedMessageById(messageId);
+          });
+        }
+        flushOfflineQueue();
         break;
       }
 
@@ -2162,15 +2378,21 @@ export function useChatConnection(userType: 'admin' | 'friend') {
     userType,
     activeCall,
     callStatus,
+    clearPendingAck,
+    flushOfflineQueue,
     createCallSessionId,
     matchesActiveCallSession,
+    markPeerPresence,
+    removeQueuedMessageById,
+    schedulePeerPresenceExpiry,
     sendSignal,
     toast,
     cleanupCall,
     initiateWebRTC,
     handleOffer,
     handleAnswer,
-    handleIceCandidate
+    handleIceCandidate,
+    updateMessageStatus
   ]);
 
   useEffect(() => {
@@ -2242,6 +2464,9 @@ export function useChatConnection(userType: 'admin' | 'friend') {
 
 ws.onclose = () => {
   setIsConnected(false);
+  inFlightMessageIdsRef.current.clear();
+  pendingAckTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+  pendingAckTimeoutsRef.current.clear();
 
   // stop reconnect if we closed intentionally
   if (isIntentionalClose.current) return;
@@ -2336,7 +2561,7 @@ ws.onclose = () => {
       type: msg.type || 'text',
       mediaUrl: msg.mediaUrl ? String(msg.mediaUrl).slice(0, 2048) : undefined, // Max URL length
       senderName: myProfileRef.current.name.slice(0, 100), // Max name length
-      status: 'sent',
+      status: 'sending',
       replyTo: msg.replyTo ? {
         id: String(msg.replyTo.id).slice(0, 100),
         text: String(msg.replyTo.text || '').slice(0, 500),
@@ -2354,7 +2579,7 @@ ws.onclose = () => {
     });
     sendTyping(false);
 
-    sendSignal({
+    const payload = {
       type: 'send-message',
       id: newMsg.id,
       text: newMsg.text,
@@ -2363,10 +2588,13 @@ ws.onclose = () => {
       timestamp: now.toISOString(),
       senderName: myProfileRef.current.name,
       replyTo: newMsg.replyTo
-    }, true);
+    };
+
+    enqueueOfflinePayload(payload);
+    flushOfflineQueue();
 
     return newMsg;
-  }, [sendSignal, sendTyping]);
+  }, [enqueueOfflinePayload, flushOfflineQueue, sendTyping]);
 
   const emergencyWipe = useCallback(() => {
     sendSignal({ type: 'emergency-wipe' });
@@ -2387,37 +2615,6 @@ ws.onclose = () => {
     },
     [sendSignal]
   );
-
-  const mergeMessagesById = useCallback((prev: Message[], incoming: Message[]) => {
-    const statusPriority: Record<string, number> = {
-      sending: 0,
-      sent: 1,
-      delivered: 2,
-      read: 3,
-    };
-
-    const messageMap = new Map<string, Message>();
-    prev.forEach((m) => messageMap.set(m.id, m));
-
-    for (const nextMessage of incoming) {
-      const existing = messageMap.get(nextMessage.id);
-      if (!existing) {
-        messageMap.set(nextMessage.id, nextMessage);
-        continue;
-      }
-      const existingPriority = statusPriority[existing.status || "sending"] ?? 0;
-      const incomingPriority = statusPriority[nextMessage.status || "sent"] ?? 1;
-      messageMap.set(nextMessage.id, {
-        ...existing,
-        ...nextMessage,
-        status: incomingPriority >= existingPriority ? nextMessage.status : existing.status,
-      });
-    }
-
-    return Array.from(messageMap.values()).sort(
-      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
-  }, []);
 
   const loadOlderMessages = useCallback(async () => {
     if (isLoadingOlderHistory || !hasMoreHistory || !historyCursorRef.current) {
@@ -2441,7 +2638,7 @@ ws.onclose = () => {
     } finally {
       setIsLoadingOlderHistory(false);
     }
-  }, [hasMoreHistory, isLoadingOlderHistory, mergeMessagesById, userType]);
+  }, [hasMoreHistory, isLoadingOlderHistory, userType]);
 
   const startCall = useCallback(async (mode: 'voice' | 'video') => {
     if (!peerConnectedRef.current) {
@@ -2753,7 +2950,7 @@ ws.onclose = () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [userType, mergeMessagesById]);
+  }, [userType]);
 
 useEffect(() => {
   connect();
@@ -2772,6 +2969,15 @@ useEffect(() => {
       clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = null;
     }
+
+    if (peerPresenceTimeoutRef.current != null) {
+      window.clearTimeout(peerPresenceTimeoutRef.current);
+      peerPresenceTimeoutRef.current = null;
+    }
+
+    pendingAckTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    pendingAckTimeoutsRef.current.clear();
+    inFlightMessageIdsRef.current.clear();
 
     if (wsRef.current) {
       try {
