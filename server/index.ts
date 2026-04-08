@@ -3,12 +3,12 @@ dotenv.config();
 
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
-import { serveStatic } from "./static";
 import { createServer } from "http";
 import path from "path";
 
 const app = express();
 const httpServer = createServer(app);
+const PORT = Number(process.env.PORT) || 5000;
 
 declare module "http" {
   interface IncomingMessage {
@@ -117,13 +117,15 @@ app.use((req, res, next) => {
   // ------------------------------
   // 🚀 RENDER-SAFE SERVER START
   // ------------------------------
-  const PORT = process.env.PORT ? Number(process.env.PORT) : 5000;
-
   // WebSocket stability fixes
   httpServer.keepAliveTimeout = 65000;
   httpServer.headersTimeout = 66000;
 
   httpServer.listen(PORT, "0.0.0.0", () => {
-    log(`Server running on Render port ${PORT}`);
+    log(`Server running on port ${PORT}`);
   });
-})();
+})().catch((error) => {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  log(`Server failed to start: ${message}`, "server");
+  process.exit(1);
+});
