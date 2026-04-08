@@ -9,6 +9,7 @@ import path from "path";
 const app = express();
 const httpServer = createServer(app);
 const PORT = Number(process.env.PORT) || 5000;
+
 let isServerReady = false;
 let startupError: Error | null = null;
 
@@ -18,6 +19,9 @@ declare module "http" {
   }
 }
 
+// ------------------------------
+// BODY PARSING
+// ------------------------------
 app.use(
   express.json({
     limit: "50mb",
@@ -30,7 +34,15 @@ app.use(
 app.use(express.urlencoded({ extended: false, limit: "50mb" }));
 
 // ------------------------------
-// GLOBAL CORS (Render Friendly)
+// BASIC LOGGING
+// ------------------------------
+app.use((req, _res, next) => {
+  console.log(req.method, req.url);
+  next();
+});
+
+// ------------------------------
+// GLOBAL CORS
 // ------------------------------
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -38,28 +50,26 @@ app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
+
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     return res.sendStatus(200);
   }
+
   next();
 });
 
 // ------------------------------
-// LOGGING
+// ROOT (ALWAYS 200)
 // ------------------------------
-export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
+app.get("/", (_req, res) => {
+  res.status(200).send("Server is running");
+});
 
-  console.log(`${formattedTime} [${source}] ${message}`);
-}
-
+// ------------------------------
+// HEALTH CHECK
+// ------------------------------
 app.get("/health", (_req, res) => {
   const timestamp = new Date().toISOString();
 
@@ -84,22 +94,44 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// ------------------------------
+// LOGGER
+// ------------------------------
+export function log(message: string, source = "express") {
+  const formattedTime = new Date().toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
+
+  console.log(`${formattedTime} [${source}] ${message}`);
+}
+
+// ------------------------------
+// API RESPONSE LOGGER
+// ------------------------------
 app.use((req, res, next) => {
   const start = Date.now();
-  const requestPath = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
+  const path = req.path;
+
+  let responseBody: any;
 
   const originalJson = res.json;
   res.json = function (body, ...args) {
-    capturedJsonResponse = body;
+    responseBody = body;
     return originalJson.apply(res, [body, ...args]);
   };
 
   res.on("finish", () => {
-    if (requestPath.startsWith("/api")) {
-      const ms = Date.now() - start;
-      let logLine = `${req.method} ${requestPath} ${res.statusCode} in ${ms}ms`;
-      if (capturedJsonResponse) logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+    if (path.startsWith("/api")) {
+      const duration = Date.now() - start;
+      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
+
+      if (responseBody) {
+        logLine += ` :: ${JSON.stringify(responseBody)}`;
+      }
+
       log(logLine);
     }
   });
@@ -107,8 +139,11 @@ app.use((req, res, next) => {
   next();
 });
 
+// ------------------------------
+// 🔥 FINAL STARTUP GATE FIX
+// ------------------------------
 app.use((req, res, next) => {
-  if (req.path === "/health") {
+  if (req.path === "/" || req.path === "/health") {
     return next();
   }
 
@@ -116,13 +151,17 @@ app.use((req, res, next) => {
     return res.status(500).json({ message: "Server startup failed" });
   }
 
-  if (!isServerReady) {
+  // ONLY block API, NOT entire server
+  if (!isServerReady && req.path.startsWith("/api")) {
     return res.status(503).json({ message: "Server is starting" });
   }
 
   next();
 });
 
+// ------------------------------
+// ERROR HANDLING
+// ------------------------------
 process.on("uncaughtException", (error) => {
   const message = error instanceof Error ? error.stack || error.message : String(error);
   log(`Uncaught exception: ${message}`, "server");
@@ -148,9 +187,8 @@ httpServer.on("error", (error) => {
 });
 
 // ------------------------------
-// RENDER-SAFE SERVER START
+// SERVER SETTINGS
 // ------------------------------
-// WebSocket stability fixes
 httpServer.setTimeout(120000);
 httpServer.keepAliveTimeout = 65000;
 httpServer.headersTimeout = 66000;
@@ -159,11 +197,12 @@ httpServer.listen(PORT, "0.0.0.0", () => {
   log(`Server running on port ${PORT}`);
 });
 
+// ------------------------------
+// INIT
+// ------------------------------
 (async () => {
-  // your routes + websocket setup
   await registerRoutes(httpServer, app);
 
-  // npm run dev should use Vite middleware even if .env has NODE_ENV=production.
   const isDevScript = process.env.npm_lifecycle_event === "dev";
   const isProduction = process.env.NODE_ENV === "production" && !isDevScript;
 
@@ -178,14 +217,14 @@ httpServer.listen(PORT, "0.0.0.0", () => {
     log(`Error ${status}: ${message}`, "server");
   });
 
-  // ------------------------------
-  // PRODUCTION STATIC HANDLING
-  // ------------------------------
+  app.use("/api", (_req, res) => {
+    res.status(404).send("Route not found");
+  });
+
   if (isProduction) {
     const staticDir = path.join(process.cwd(), "dist/public");
     app.use(express.static(staticDir));
 
-    // React SPA fallback
     app.get("*", (req, res, next) => {
       if (
         req.path.startsWith("/api") ||
@@ -203,15 +242,13 @@ httpServer.listen(PORT, "0.0.0.0", () => {
     await setupVite(httpServer, app);
   }
 
-  // ------------------------------
-  // 🚀 RENDER-SAFE SERVER START
-  // ------------------------------
-  // WebSocket stability fixes
   isServerReady = true;
   startupError = null;
+
   log("Server bootstrap complete", "server");
 })().catch((error) => {
   startupError = error instanceof Error ? error : new Error(String(error));
   const message = startupError.stack || startupError.message;
+
   log(`Server failed to start: ${message}`, "server");
 });
