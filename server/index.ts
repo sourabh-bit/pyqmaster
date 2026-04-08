@@ -9,6 +9,8 @@ import path from "path";
 const app = express();
 const httpServer = createServer(app);
 const PORT = Number(process.env.PORT) || 5000;
+let isServerReady = false;
+let startupError: Error | null = null;
 
 declare module "http" {
   interface IncomingMessage {
@@ -58,9 +60,33 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+app.get("/health", (_req, res) => {
+  const timestamp = new Date().toISOString();
+
+  if (startupError) {
+    return res.status(500).json({
+      status: "error",
+      timestamp,
+      message: startupError.message,
+    });
+  }
+
+  if (!isServerReady) {
+    return res.status(200).json({
+      status: "starting",
+      timestamp,
+    });
+  }
+
+  return res.status(200).json({
+    status: "ok",
+    timestamp,
+  });
+});
+
 app.use((req, res, next) => {
   const start = Date.now();
-  const path = req.path;
+  const requestPath = req.path;
   let capturedJsonResponse: Record<string, any> | undefined = undefined;
 
   const originalJson = res.json;
@@ -70,15 +96,67 @@ app.use((req, res, next) => {
   };
 
   res.on("finish", () => {
-    if (path.startsWith("/api")) {
+    if (requestPath.startsWith("/api")) {
       const ms = Date.now() - start;
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${ms}ms`;
+      let logLine = `${req.method} ${requestPath} ${res.statusCode} in ${ms}ms`;
       if (capturedJsonResponse) logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
       log(logLine);
     }
   });
 
   next();
+});
+
+app.use((req, res, next) => {
+  if (req.path === "/health") {
+    return next();
+  }
+
+  if (startupError) {
+    return res.status(500).json({ message: "Server startup failed" });
+  }
+
+  if (!isServerReady) {
+    return res.status(503).json({ message: "Server is starting" });
+  }
+
+  next();
+});
+
+process.on("uncaughtException", (error) => {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  log(`Uncaught exception: ${message}`, "server");
+});
+
+process.on("unhandledRejection", (reason) => {
+  const message = reason instanceof Error ? reason.stack || reason.message : String(reason);
+  log(`Unhandled rejection: ${message}`, "server");
+});
+
+httpServer.on("clientError", (error, socket) => {
+  log(`Client error: ${error.message}`, "server");
+
+  if (socket.writable) {
+    socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+  }
+});
+
+httpServer.on("error", (error) => {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  startupError = error instanceof Error ? error : new Error(message);
+  log(`HTTP server error: ${message}`, "server");
+});
+
+// ------------------------------
+// RENDER-SAFE SERVER START
+// ------------------------------
+// WebSocket stability fixes
+httpServer.setTimeout(120000);
+httpServer.keepAliveTimeout = 65000;
+httpServer.headersTimeout = 66000;
+
+httpServer.listen(PORT, "0.0.0.0", () => {
+  log(`Server running on port ${PORT}`);
 });
 
 (async () => {
@@ -129,15 +207,11 @@ app.use((req, res, next) => {
   // 🚀 RENDER-SAFE SERVER START
   // ------------------------------
   // WebSocket stability fixes
-  httpServer.setTimeout(120000);
-  httpServer.keepAliveTimeout = 65000;
-  httpServer.headersTimeout = 66000;
-
-  httpServer.listen(PORT, "0.0.0.0", () => {
-    log(`Server running on port ${PORT}`);
-  });
+  isServerReady = true;
+  startupError = null;
+  log("Server bootstrap complete", "server");
 })().catch((error) => {
-  const message = error instanceof Error ? error.stack || error.message : String(error);
+  startupError = error instanceof Error ? error : new Error(String(error));
+  const message = startupError.stack || startupError.message;
   log(`Server failed to start: ${message}`, "server");
-  process.exit(1);
 });
